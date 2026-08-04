@@ -15,8 +15,8 @@
 - Goal: Define architecture, data flow, failure handling, and tests.
 - Acceptance: User approves the proposed design.
 
-## [In Progress] Document and review the design
-- Status: In Progress
+## [Completed] Document and review the design
+- Status: Completed
 - Goal: Persist the approved specification and review it before implementation planning.
 - Acceptance: Design document is committed separately and approved for planning.
 
