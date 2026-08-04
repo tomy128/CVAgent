@@ -15,8 +15,8 @@
 - Goal: Define architecture, page structure, graph observability, states, errors, and testing.
 - Acceptance: User approves the complete Web MVP design.
 
-## [In Progress] Document and review Web design
-- Status: In Progress
+## [Completed] Document and review Web design
+- Status: Completed
 - Goal: Persist and independently review the approved specification.
 - Acceptance: Design spec is committed separately and approved for implementation planning.
 
