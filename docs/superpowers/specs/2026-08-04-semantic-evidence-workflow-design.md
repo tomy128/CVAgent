@@ -6,7 +6,7 @@ Tailor a master resume to a job description using semantically relevant, traceab
 
 ## Product scope
 
-The master resume is required and always acts as the primary evidence source. An optional `--sources` directory may contain project notes, old resumes, work records, or other supporting Markdown and text files. The existing `--evidence` option remains temporarily as a compatibility alias. When the master resume is sufficient, no supplemental directory is needed.
+The master resume is required and always acts as the primary evidence source. An optional `--sources` directory may contain project notes, old resumes, work records, or other supporting Markdown and text files. The existing `--evidence` option remains temporarily as a compatibility alias. Supplying both options is a CLI usage error rather than an implicit merge. When the master resume is sufficient, no supplemental directory is needed.
 
 The MVP builds an in-memory index for each run. Persistent indexes, incremental updates, PDF/Word conversion, web UI, and external integrations remain out of scope.
 
@@ -34,13 +34,17 @@ The VectorStore is process-local and never enters Graph State or SQLite checkpoi
 
 ## Retrieval
 
-Each requirement produces a query from its description, keywords, and category. Retrieval combines the existing lexical search with semantic results. Results are deduplicated by evidence ID; exact keyword matches remain high priority while semantic matches improve recall.
+Each requirement produces a query from its description, keywords, and category. The first attempt requests four lexical and four semantic results. Results are deduplicated by evidence ID and ranked with reciprocal-rank fusion: a lexical result contributes `2 / (60 + rank)` and a semantic result contributes `1 / (60 + rank)`. Shared results receive both contributions, and ties sort by evidence ID. This deliberately favors exact keyword evidence while allowing semantic matches to improve recall.
 
-Real mode uses an OpenAI-compatible embedding model. Demo mode uses deterministic local embeddings so tests and demonstrations require no API key. An embedding failure in real mode is reported explicitly rather than silently pretending semantic retrieval occurred.
+On retry, supplemental queries are derived from the unsupported claim text and its related requirement. Each method returns up to eight results per query. New results are merged with the first attempt using the same deterministic ranking; previously retrieved evidence is retained.
+
+Real mode uses an OpenAI-compatible embedding model configured by `RESUME_AGENT_EMBEDDING_MODEL`, defaulting to `text-embedding-3-small`. It shares `OPENAI_API_KEY` and optional `OPENAI_BASE_URL` with the chat model; optional `RESUME_AGENT_EMBEDDING_DIMENSIONS` is passed only when set. Demo mode uses deterministic local embeddings so tests and demonstrations require no API key. An embedding failure in real mode is reported explicitly rather than silently pretending semantic retrieval occurred.
+
+Each chunk stores stable ID, resolved source path, one-based chunk index, content, and content hash. The ID is derived from source path, chunk index, and content, matching the existing stable-ID behavior. These fields are sufficient to rebuild the process-local index and preserve claim citations after checkpoint recovery.
 
 ## Verification loop
 
-Graph State records `retrieval_attempt`, queries, ranked results, retry reason, and verification output. If verification finds unsupported claims on the first attempt, the workflow derives supplemental queries from those claims, increases retrieval breadth, redrafts, and verifies again. A second failure cannot loop again: unsupported wording is removed and the corrected draft proceeds to human review.
+Graph State records `retrieval_attempt`, queries, ranked results, retry reason, and verification output. If verification finds unsupported claims on the first attempt, the workflow derives supplemental queries from those claims, increases retrieval breadth, redrafts, and verifies again. A second failure cannot loop again. The verifier's corrected Markdown and supported-claim list pass through a deterministic safety gate: every changed or generated supported claim must cite an existing evidence ID, and normalized unsupported claim text must be absent from the corrected Markdown. If either check fails, the run stops for manual correction while retaining its checkpoint; it does not emit an approvable resume. If the gate passes, the corrected draft proceeds to human review without a third model verification call.
 
 Retry requires new queries and retrieval results; merely asking the model to try again is not a valid retry. Missing evidence is reported as a coverage gap and must never be rewritten as candidate experience.
 
@@ -55,7 +59,7 @@ Empty supplemental files are skipped with their sources recorded. The run stops 
 - Unit-test deterministic embeddings, hybrid deduplication and ranking, query expansion, and retry limits.
 - Graph-test first-pass success, retry success, retry exhaustion, and human rejection.
 - Run the complete CLI in `--demo --yes` mode without network access.
-- Verify every retained resume claim references evidence and no run exceeds one retrieval retry.
+- Verify every changed or generated retained claim references evidence, every flagged unsupported claim is absent, and no run exceeds one retrieval retry.
 - Confirm both resume-only input and resume-plus-sources input work.
 - Confirm audit output explains whether each result came from lexical or semantic retrieval.
 
