@@ -20,7 +20,12 @@
 - Goal: Persist and independently review the approved specification.
 - Acceptance: Design spec is committed separately and approved for implementation planning.
 
-## [Pending] Plan Web implementation
-- Status: Pending
+## [Completed] Plan Web implementation
+- Status: Completed
 - Goal: Create an actionable implementation plan with planning and functional commit boundaries.
 - Acceptance: Plan is ready for code implementation.
+
+## [In Progress] Implement local Web workbench
+- Status: In Progress
+- Goal: Build the approved FastAPI and native Web interface over the existing Resume Agent workflow.
+- Acceptance: Separate model configuration, uploads, durable Graph events, timeout diagnosis, full-screen Markdown review, secure local APIs, recovery, and existing CLI regression tests all pass.
