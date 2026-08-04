@@ -1,0 +1,240 @@
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
+
+const resultLabels = {
+  "tailored-resume.md": "定制简历",
+  "requirement-map.md": "要求映射",
+  "evidence-report.md": "证据报告",
+  "interview-questions.md": "面试问题",
+  "run.json": "运行详情",
+};
+const graphNodes = [
+  ["extract_requirements", "解析 JD", 20, 42], ["build_evidence_index", "构建索引", 160, 42],
+  ["retrieve_evidence", "检索证据", 300, 42], ["draft_resume", "生成简历", 440, 42],
+  ["verify_claims", "事实核验", 580, 42], ["safety_gate", "安全检查", 720, 42],
+  ["human_review", "人工审核", 860, 42],
+];
+const state = {
+  csrf: "", run: null, events: [], eventSource: null, startedAt: null,
+  nodeStates: Object.fromEntries(graphNodes.map(([id]) => [id, "pending"])),
+  activeResult: "tailored-resume.md", reviewSource: "", refreshTimer: null,
+};
+
+function toast(message) {
+  const item = document.createElement("div"); item.className = "toast"; item.textContent = message;
+  $("#toast-region").append(item); setTimeout(() => item.remove(), 4200);
+}
+function value(id) { return $(id).value.trim(); }
+function numberValue(id) { return Number(value(id)); }
+function serviceSettings(service) {
+  const settings = {
+    base_url: value(`#${service}-base-url`) || null,
+    api_key: value(`#${service}-api-key`) || null,
+    model: value(`#${service}-model`),
+    timeout_seconds: numberValue(`#${service}-timeout`),
+    max_retries: numberValue(`#${service}-retries`),
+    use_server_key: $(`#${service}-server-key`).checked,
+  };
+  if (service === "embedding") settings.dimensions = numberValue("#embedding-dimensions") || null;
+  return settings;
+}
+function config() { return { llm: serviceSettings("llm"), embedding: serviceSettings("embedding"), demo: $("#demo-mode").checked }; }
+function persistConfig() {
+  const saved = config(); delete saved.llm.api_key; delete saved.embedding.api_key;
+  localStorage.setItem("resume-workbench-config", JSON.stringify(saved));
+}
+function restoreConfig() {
+  const raw = localStorage.getItem("resume-workbench-config"); if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    for (const service of ["llm", "embedding"]) {
+      for (const field of ["base_url", "model", "timeout_seconds", "max_retries"]) {
+        const element = $(`#${service}-${field.replace("_seconds", "").replace("max_retries", "retries")}`);
+        if (element && saved[service]?.[field] != null) element.value = saved[service][field];
+      }
+      $(`#${service}-server-key`).checked = Boolean(saved[service]?.use_server_key);
+    }
+    if (saved.embedding?.dimensions) $("#embedding-dimensions").value = saved.embedding.dimensions;
+    $("#demo-mode").checked = Boolean(saved.demo);
+  } catch { localStorage.removeItem("resume-workbench-config"); }
+}
+async function api(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (options.method && options.method !== "GET") headers.set("X-Resume-CSRF", state.csrf);
+  const response = await fetch(path, { ...options, headers });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : data.message || `请求失败 (${response.status})`);
+  return data;
+}
+async function bootstrap() {
+  const response = await fetch("/api/bootstrap"); if (!response.ok) throw new Error("无法建立本地会话");
+  state.csrf = (await response.json()).csrf_token;
+  const lastRun = localStorage.getItem("resume-workbench-run");
+  if (lastRun) { try { await loadRun(lastRun); } catch { localStorage.removeItem("resume-workbench-run"); } }
+}
+function updateFileLabel(inputId, outputId) {
+  const files = [...$(inputId).files]; $(outputId).textContent = files.length ? files.map((file) => file.name).join(", ") : "未选择";
+}
+async function testService(service) {
+  const indicator = $(`#${service}-state`); indicator.className = "connection-state"; indicator.textContent = "测试中…";
+  const started = performance.now();
+  try {
+    const result = await api("/api/connections/test", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service, settings: serviceSettings(service) }),
+    });
+    indicator.classList.add("success"); indicator.textContent = `可用 · ${result.duration_ms}ms`; persistConfig();
+  } catch (error) {
+    indicator.classList.add("error"); indicator.textContent = `失败 · ${Math.round(performance.now() - started)}ms`; toast(error.message);
+  }
+}
+async function startRun() {
+  const jd = $("#jd-file").files[0], resume = $("#resume-file").files[0];
+  if (!jd || !resume) { toast("请选择 JD 和 Master Resume"); return; }
+  const button = $("#start-run"); button.disabled = true; button.textContent = "正在创建…";
+  const form = new FormData(); form.append("config", JSON.stringify(config())); form.append("jd", jd); form.append("resume", resume);
+  for (const source of $("#sources-files").files) form.append("sources", source);
+  try {
+    state.run = await api("/api/runs", { method: "POST", body: form }); persistConfig();
+    localStorage.setItem("resume-workbench-run", state.run.id); state.startedAt = Date.now(); showRun(); connectEvents(); startRefresh();
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; button.textContent = "开始运行"; }
+}
+function showRun() { $("#empty-state").classList.add("hidden"); $("#run-view").classList.remove("hidden"); renderRun(); }
+function statusTitle(status) {
+  return ({ preparing: "正在准备", running: "正在执行", waiting_review: "等待人工审核", approved: "运行已批准", rejected: "运行已拒绝", failed: "运行失败", cancelling: "正在终止", cancelled: "运行已终止", interrupted: "运行已中断" })[status] || status;
+}
+function renderRun() {
+  if (!state.run) return;
+  $("#run-id").textContent = `RUN ${state.run.id}`; $("#run-title").textContent = statusTitle(state.run.status);
+  $("#current-node").textContent = graphNodes.find(([id]) => id === state.run.current_node)?.[1] || statusTitle(state.run.status);
+  if (state.run.error) {
+    const error = state.run.error;
+    const category = {
+      timeout: "请求超时",
+      authentication: "认证失败",
+      model_not_found: "模型不存在",
+      connection_refused: "连接被拒绝",
+      cancelled: "任务已取消",
+      workflow: "工作流失败",
+    }[error.category] || error.type;
+    const context = [error.service, error.model, `${error.timeout_seconds}s`, error.base_url]
+      .filter(Boolean).join(" · ");
+    $("#current-summary").textContent = `${category}${context ? ` · ${context}` : ""}`;
+  }
+  $("#recovery-actions").classList.toggle("hidden", !["failed", "interrupted"].includes(state.run.status));
+  $("#cancel-run").disabled = !["preparing", "running", "waiting_review", "cancelling"].includes(state.run.status);
+  renderGraph(); renderResults();
+}
+function renderGraph() {
+  const svg = $("#graph-svg"); svg.replaceChildren();
+  const ns = "http://www.w3.org/2000/svg";
+  graphNodes.slice(0, -1).forEach(([, , x, y], index) => {
+    const next = graphNodes[index + 1]; const line = document.createElementNS(ns, "path");
+    line.setAttribute("class", "edge"); line.setAttribute("d", `M ${x + 104} ${y + 26} L ${next[2]} ${next[3] + 26}`); svg.append(line);
+  });
+  const retry = document.createElementNS(ns, "path"); retry.setAttribute("class", "edge retry"); retry.setAttribute("d", "M 632 102 C 590 140 350 140 350 96"); svg.append(retry);
+  graphNodes.forEach(([id, label, x, y]) => {
+    const group = document.createElementNS(ns, "g"); group.setAttribute("class", `node ${state.nodeStates[id] || "pending"}`);
+    const rect = document.createElementNS(ns, "rect"); rect.setAttribute("x", x); rect.setAttribute("y", y); rect.setAttribute("width", 104); rect.setAttribute("height", 52);
+    const text = document.createElementNS(ns, "text"); text.setAttribute("x", x + 52); text.setAttribute("y", y + 31); text.textContent = label;
+    group.append(rect, text); svg.append(group);
+  });
+  const completeCount = Object.values(state.nodeStates).filter((status) => ["complete", "waiting"].includes(status)).length;
+  $("#progress-bar").style.width = `${Math.max(4, Math.round(completeCount / graphNodes.length * 100))}%`;
+  $("#graph-list").innerHTML = graphNodes.map(([id, label]) => `<li>${label}：${state.nodeStates[id] || "pending"}</li>`).join("");
+}
+function connectEvents() {
+  state.eventSource?.close(); state.eventSource = new EventSource(`/api/runs/${state.run.id}/events`);
+  state.eventSource.onmessage = onEvent;
+  for (const type of ["node_started", "node_completed", "node_failed", "review_required", "run_completed", "run_failed"]) state.eventSource.addEventListener(type, onEvent);
+  state.eventSource.onerror = () => { $("#current-summary").textContent = "事件连接暂时中断，正在自动重连…"; };
+}
+function onEvent(message) {
+  const event = JSON.parse(message.data); state.events.push(event); state.events = state.events.slice(-30);
+  if (event.node) {
+    const mapped = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
+    state.nodeStates[event.node] = mapped; state.run.current_node = event.node;
+  }
+  $("#current-summary").textContent = event.summary; renderEvents(); renderRun();
+  if (["review_required", "run_completed", "run_failed"].includes(event.type)) loadRun(state.run.id);
+}
+function renderEvents() {
+  $("#event-list").innerHTML = state.events.slice(-5).reverse().map((event) => `<li><time>${new Date(event.timestamp).toLocaleTimeString([], { hour12: false })}</time>${escapeHtml(event.summary)}</li>`).join("");
+}
+async function loadRun(runId) {
+  state.run = await api(`/api/runs/${runId}`);
+  state.events = state.run.events || [];
+  state.nodeStates = Object.fromEntries(graphNodes.map(([id]) => [id, "pending"]));
+  for (const event of state.events) if (event.node) {
+    state.nodeStates[event.node] = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
+  }
+  state.startedAt = Date.parse(state.run.created_at); showRun(); renderEvents();
+  if (["running", "preparing", "waiting_review", "cancelling"].includes(state.run.status)) connectEvents();
+  return state.run;
+}
+function startRefresh() { clearInterval(state.refreshTimer); state.refreshTimer = setInterval(() => state.run && loadRun(state.run.id).catch(() => {}), 1800); }
+function renderResults() {
+  const results = state.run?.results || {}; $("#result-links").replaceChildren();
+  for (const [name, label] of Object.entries(resultLabels)) if (name in results) {
+    const button = document.createElement("button"); button.type = "button"; button.className = "result-link"; button.textContent = label; button.onclick = () => openReview(name); $("#result-links").append(button);
+  }
+  $("#result-status").textContent = Object.keys(results).length ? `${Object.keys(results).length} 项可查看` : "运行完成后可查看";
+  if (state.run?.status === "waiting_review" && results["tailored-resume.md"]) $("#result-status").textContent = "等待你的审核";
+}
+function openReview(name) {
+  state.activeResult = name; state.reviewSource = state.run.results[name] || "";
+  $("#review-view").classList.remove("hidden"); $("#review-run-id").textContent = `运行 ${state.run.id}`; $("#review-status").textContent = statusTitle(state.run.status);
+  renderTabs(); setReviewMode("render"); $("#markdown-source").value = state.reviewSource; renderMarkdown();
+  const actionable = state.run.status === "waiting_review" && name === "tailored-resume.md";
+  $("#approve-review").disabled = !actionable; $("#reject-review").disabled = !actionable;
+}
+function renderTabs() {
+  $("#result-tabs").replaceChildren();
+  for (const [name, label] of Object.entries(resultLabels)) if (name in state.run.results) {
+    const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.className = name === state.activeResult ? "active" : "";
+    button.onclick = () => openReview(name); $("#result-tabs").append(button);
+  }
+}
+function renderMarkdown() {
+  const source = $("#markdown-source").value; state.reviewSource = source;
+  if (state.activeResult === "run.json") { $("#markdown-preview").textContent = source; return; }
+  const md = window.markdownit({ html: false, linkify: true, highlight(code, language) { try { return window.hljs.highlight(code, { language }).value; } catch { return escapeHtml(code); } } });
+  $("#markdown-preview").innerHTML = window.DOMPurify.sanitize(md.render(source));
+}
+function setReviewMode(mode) {
+  $$(".view-switch button").forEach((button) => button.classList.toggle("active", button.dataset.view === mode));
+  $("#markdown-preview").classList.toggle("hidden", mode !== "render"); $("#markdown-source").classList.toggle("hidden", mode !== "source");
+  if (mode === "render") renderMarkdown();
+}
+async function submitReview(action) {
+  try {
+    state.run = await api(`/api/runs/${state.run.id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, resume_markdown: $("#markdown-source").value }) });
+    $("#review-view").classList.add("hidden"); renderRun(); toast(action === "approve" ? "简历已批准" : "运行已拒绝");
+  } catch (error) { toast(error.message); }
+}
+async function cancelRun() { try { state.run = await api(`/api/runs/${state.run.id}/cancel`, { method: "POST" }); renderRun(); } catch (error) { toast(error.message); } }
+async function resumeRun() {
+  try {
+    state.run = await api(`/api/runs/${state.run.id}/resume`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config()),
+    });
+    state.startedAt = Date.now(); renderRun(); connectEvents(); toast("已从 checkpoint 恢复");
+  } catch (error) { toast(error.message); }
+}
+function escapeHtml(text) { return String(text).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]); }
+
+restoreConfig();
+bootstrap().catch((error) => toast(error.message));
+$$('[data-test-service]').forEach((button) => button.addEventListener("click", () => testService(button.dataset.testService)));
+$("#start-run").addEventListener("click", startRun); $("#cancel-run").addEventListener("click", cancelRun);
+$("#resume-run").addEventListener("click", resumeRun); $("#test-after-failure").addEventListener("click", () => testService(state.run?.current_node === "build_evidence_index" ? "embedding" : "llm"));
+$("#jd-file").addEventListener("change", () => updateFileLabel("#jd-file", "#jd-file-name"));
+$("#resume-file").addEventListener("change", () => updateFileLabel("#resume-file", "#resume-file-name"));
+$("#sources-files").addEventListener("change", () => updateFileLabel("#sources-files", "#sources-file-name"));
+$("#panel-toggle").addEventListener("click", () => { const panel = $(".setup-panel"); panel.classList.toggle("collapsed"); $("#panel-toggle").setAttribute("aria-expanded", String(!panel.classList.contains("collapsed"))); });
+$("#close-review").addEventListener("click", () => $("#review-view").classList.add("hidden"));
+$("#approve-review").addEventListener("click", () => submitReview("approve")); $("#reject-review").addEventListener("click", () => submitReview("reject"));
+$$('.view-switch button').forEach((button) => button.addEventListener("click", () => setReviewMode(button.dataset.view)));
+let renderTimer; $("#markdown-source").addEventListener("input", () => { clearTimeout(renderTimer); renderTimer = setTimeout(renderMarkdown, 180); });
+setInterval(() => { if (!state.startedAt) return; const elapsed = (Date.now() - state.startedAt) / 1000; $("#elapsed").textContent = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${(elapsed % 60).toFixed(1).padStart(4, "0")}`; }, 100);

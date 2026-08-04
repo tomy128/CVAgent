@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NoNote Resume Workbench</title>
+  <link rel="stylesheet" href="/static/vendor/github.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="brand-mark">N</span><span>NoNote Resume</span><small>Evidence-grounded workspace</small></div>
+    <div class="local-badge"><span aria-hidden="true">●</span> 本地运行</div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="setup-panel" aria-label="运行配置">
+      <button class="mobile-panel-toggle" id="panel-toggle" type="button" aria-expanded="true">配置与材料</button>
+      <div id="setup-content">
+        <section class="config-section">
+          <div class="section-heading"><div><span class="eyebrow">MODEL SERVICE</span><h2>LLM</h2></div><span class="connection-state" id="llm-state">未测试</span></div>
+          <label>Base URL<input id="llm-base-url" type="url" placeholder="https://api.openai.com/v1"></label>
+          <label>API Key<input id="llm-api-key" type="password" autocomplete="off" placeholder="仅保留在当前页面"></label>
+          <label>Model<input id="llm-model" value="gpt-5-mini"></label>
+          <div class="field-row"><label>Timeout (s)<input id="llm-timeout" type="number" min="1" max="3600" value="120"></label><label>Retries<input id="llm-retries" type="number" min="0" max="5" value="1"></label></div>
+          <label class="check-row"><input id="llm-server-key" type="checkbox"> 使用服务端 API Key</label>
+          <button class="button secondary full" type="button" data-test-service="llm">测试 LLM 连接</button>
+        </section>
+
+        <section class="config-section">
+          <div class="section-heading"><div><span class="eyebrow">MODEL SERVICE</span><h2>Embedding</h2></div><span class="connection-state" id="embedding-state">未测试</span></div>
+          <label>Base URL<input id="embedding-base-url" type="url" value="http://localhost:11434/v1"></label>
+          <label>API Key<input id="embedding-api-key" type="password" autocomplete="off" value="ollama"></label>
+          <label>Model<input id="embedding-model" value="qwen3-embedding:0.6b"></label>
+          <div class="field-row"><label>Timeout (s)<input id="embedding-timeout" type="number" min="1" max="3600" value="300"></label><label>Retries<input id="embedding-retries" type="number" min="0" max="5" value="1"></label></div>
+          <label>Dimensions <span class="optional">可选</span><input id="embedding-dimensions" type="number" min="1" placeholder="由模型决定"></label>
+          <label class="check-row"><input id="embedding-server-key" type="checkbox"> 使用服务端 API Key</label>
+          <button class="button secondary full" type="button" data-test-service="embedding">测试 Embedding 连接</button>
+        </section>
+
+        <section class="config-section inputs-section">
+          <span class="eyebrow">INPUT MATERIALS</span><h2>材料</h2>
+          <label class="file-field"><span>JD <b>必需</b></span><input id="jd-file" type="file" accept=".md,.txt"><output id="jd-file-name">选择 .md 或 .txt</output></label>
+          <label class="file-field"><span>Master Resume <b>必需</b></span><input id="resume-file" type="file" accept=".md,.txt"><output id="resume-file-name">选择 .md 或 .txt</output></label>
+          <label class="file-field"><span>Sources <i>可选，可多选</i></span><input id="sources-files" type="file" accept=".md,.txt" multiple><output id="sources-file-name">添加补充材料</output></label>
+        </section>
+
+        <label class="check-row demo-row"><input id="demo-mode" type="checkbox"> Demo 模式（无需模型服务）</label>
+        <button class="button primary full run-button" id="start-run" type="button">开始运行</button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <section class="empty-state" id="empty-state">
+        <div class="empty-graphic" aria-hidden="true"><span>JD</span><i>→</i><span>证据</span><i>→</i><span>简历</span></div>
+        <h1>准备一次可追踪的简历适配</h1>
+        <p>配置模型并添加 JD 与主简历。运行后，这里会展示 Graph 的每个步骤、耗时和证据结果。</p>
+      </section>
+
+      <section class="run-view hidden" id="run-view" aria-live="polite">
+        <div class="run-header"><div><span class="eyebrow" id="run-id">RUN</span><h1 id="run-title">正在准备</h1></div><div class="run-actions"><span class="elapsed" id="elapsed">00:00.0</span><button class="button danger-quiet" id="cancel-run" type="button">终止</button></div></div>
+
+        <div class="graph-wrap">
+          <svg class="graph" viewBox="0 0 980 150" role="img" aria-labelledby="graph-title"><title id="graph-title">Resume Agent 执行流程</title><g id="graph-svg"></g></svg>
+          <ol class="sr-only" id="graph-list" aria-live="polite"></ol>
+        </div>
+
+        <section class="run-detail-grid">
+          <div><span class="eyebrow">CURRENT STEP</span><h2 id="current-node">等待开始</h2><p id="current-summary">运行开始后展示当前节点详情。</p><div class="recovery-actions hidden" id="recovery-actions"><button class="button secondary" id="test-after-failure" type="button">测试当前连接</button><button class="button primary" id="resume-run" type="button">使用当前配置重试</button></div><div class="progress-track"><i id="progress-bar"></i></div></div>
+          <div class="event-column"><span class="eyebrow">RECENT EVENTS</span><ol class="event-list" id="event-list"></ol></div>
+        </section>
+
+        <section class="results-section">
+          <div class="section-heading"><div><span class="eyebrow">OUTPUT</span><h2>结果</h2></div><span id="result-status">运行完成后可查看</span></div>
+          <div class="result-links" id="result-links"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <section class="review-view hidden" id="review-view" aria-label="结果审阅">
+    <header class="review-header"><div><button class="icon-button" id="close-review" type="button" aria-label="返回工作台">←</button><div><strong id="review-run-id">Run</strong><small id="review-status">等待审核</small></div></div><div class="review-actions"><button class="button secondary" id="reject-review" type="button">拒绝</button><button class="button primary" id="approve-review" type="button">批准并保存</button></div></header>
+    <nav class="result-tabs" id="result-tabs" aria-label="结果文件"></nav>
+    <div class="review-layout">
+      <main class="document-stage"><article class="markdown-body" id="markdown-preview"></article><textarea class="markdown-source hidden" id="markdown-source" spellcheck="false"></textarea></main>
+      <aside class="review-inspector"><div class="view-switch" role="group" aria-label="Markdown 查看模式"><button class="active" data-view="render" type="button">渲染</button><button data-view="source" type="button">源码</button></div><h2>审阅状态</h2><p class="verified">✓ 事实核验流程已完成</p><h2>查看说明</h2><p>源码模式可以编辑 Markdown。编辑后的内容在提交前需要重新核验。</p></aside>
+    </div>
+  </section>
+
+  <div class="toast-region" id="toast-region" aria-live="assertive"></div>
+
+  <script src="/static/vendor/markdown-it.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
+  <script src="/static/vendor/highlight.min.js"></script>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

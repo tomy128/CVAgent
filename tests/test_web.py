@@ -1,0 +1,175 @@
+import json
+import time
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from resume_agent.web.app import create_app
+from resume_agent.web.events import EventStore
+from resume_agent.web.schemas import EmbeddingSettings, ModelSettings, RunSettings
+from resume_agent.web.service import RunRecord, classify_error
+
+
+def demo_settings() -> RunSettings:
+    return RunSettings(
+        demo=True,
+        llm=ModelSettings(model="demo-llm"),
+        embedding=EmbeddingSettings(model="demo-embedding"),
+    )
+
+
+def local_client(tmp_path: Path) -> tuple[TestClient, dict[str, str]]:
+    client = TestClient(create_app(tmp_path / "output", testing=True))
+    assert client.get("/").status_code == 200
+    bootstrap = client.get("/api/bootstrap")
+    assert bootstrap.status_code == 200
+    return client, {"X-Resume-CSRF": bootstrap.json()["csrf_token"]}
+
+
+def wait_for_status(client: TestClient, run_id: str, expected: str) -> dict:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        payload = client.get(f"/api/runs/{run_id}").json()
+        if payload["status"] == expected:
+            return payload
+        time.sleep(0.05)
+    raise AssertionError(f"Run did not reach {expected}")
+
+
+def create_demo_run(client: TestClient, headers: dict[str, str]) -> dict:
+    response = client.post(
+        "/api/runs",
+        headers=headers,
+        data={"config": demo_settings().model_dump_json()},
+        files={
+            "jd": ("jd.md", b"- Python\n- LangGraph", "text/markdown"),
+            "resume": ("resume.md", b"# Resume\n\nPython engineer", "text/markdown"),
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_api_requires_local_session_and_csrf(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "output", testing=True)
+    anonymous = TestClient(app)
+    assert anonymous.get("/api/bootstrap").status_code == 401
+
+    client, _ = local_client(tmp_path)
+    response = client.post(
+        "/api/runs",
+        data={"config": demo_settings().model_dump_json()},
+        files={
+            "jd": ("jd.md", b"Python", "text/markdown"),
+            "resume": ("resume.md", b"Python", "text/markdown"),
+        },
+    )
+    assert response.status_code == 403
+
+
+def test_settings_redact_secrets() -> None:
+    settings = RunSettings(
+        llm=ModelSettings(model="chat", api_key="llm-secret"),
+        embedding=EmbeddingSettings(model="embed", api_key="embed-secret"),
+    )
+
+    serialized = json.dumps(settings.redacted())
+
+    assert "llm-secret" not in serialized
+    assert "embed-secret" not in serialized
+    assert settings.redacted()["llm"]["has_api_key"] is True
+
+
+def test_demo_run_reaches_review_and_can_be_approved(tmp_path: Path) -> None:
+    client, headers = local_client(tmp_path)
+    created = create_demo_run(client, headers)
+    run = wait_for_status(client, created["id"], "waiting_review")
+
+    assert "tailored-resume.md" in run["results"]
+    assert "semantic" in run["results"]["run.json"]
+    approval = client.post(
+        f"/api/runs/{created['id']}/review",
+        headers=headers,
+        json={
+            "action": "approve",
+            "resume_markdown": run["results"]["tailored-resume.md"],
+        },
+    )
+
+    assert approval.status_code == 200, approval.text
+    assert approval.json()["status"] == "approved"
+
+
+def test_edited_demo_resume_requires_evidence(tmp_path: Path) -> None:
+    client, headers = local_client(tmp_path)
+    created = create_demo_run(client, headers)
+    wait_for_status(client, created["id"], "waiting_review")
+
+    response = client.post(
+        f"/api/runs/{created['id']}/review",
+        headers=headers,
+        json={"action": "approve", "resume_markdown": "Invented production result"},
+    )
+
+    assert response.status_code == 409
+    assert "unsupported" in response.json()["detail"].lower()
+    assert client.get(f"/api/runs/{created['id']}").json()["status"] == "waiting_review"
+
+
+def test_event_store_replays_after_event_id(tmp_path: Path) -> None:
+    store = EventStore(tmp_path / "events.sqlite", "run-1")
+    first = store.append("run_started", "running", "Started")
+    second = store.append("node_started", "running", "Parsing", "extract_requirements")
+
+    replay = store.after(first.id)
+
+    assert [item.id for item in replay] == [second.id]
+    assert replay[0].node == "extract_requirements"
+
+
+def test_upload_rejects_unsupported_file_type(tmp_path: Path) -> None:
+    client, headers = local_client(tmp_path)
+    response = client.post(
+        "/api/runs",
+        headers=headers,
+        data={"config": demo_settings().model_dump_json()},
+        files={
+            "jd": ("jd.pdf", b"pdf", "application/pdf"),
+            "resume": ("resume.md", b"Python", "text/markdown"),
+        },
+    )
+
+    assert response.status_code == 409
+    assert "unsupported" in response.json()["detail"].lower()
+
+
+def test_markdown_preview_disables_html_and_sanitizes(tmp_path: Path) -> None:
+    source = (Path(__file__).parents[1] / "src/resume_agent/web/static/app.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "html: false" in source
+    assert "DOMPurify.sanitize" in source
+
+
+def test_timeout_error_is_actionable_and_redacted(tmp_path: Path) -> None:
+    settings = RunSettings(
+        llm=ModelSettings(model="chat", api_key="llm-secret"),
+        embedding=EmbeddingSettings(
+            model="local-embed",
+            api_key="embed-secret",
+            base_url="http://localhost:11434/v1",
+            timeout_seconds=300,
+        ),
+    )
+    record = RunRecord("run-1", tmp_path, settings, "now", "now")
+    record.current_node = "retrieve_evidence"
+
+    error = classify_error(TimeoutError("embedding request timed out"), record)
+    serialized = json.dumps(error)
+
+    assert error["category"] == "timeout"
+    assert error["service"] == "embedding"
+    assert error["timeout_seconds"] == 300
+    assert "embed-secret" not in serialized
+    assert "llm-secret" not in serialized

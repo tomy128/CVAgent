@@ -1,5 +1,6 @@
 """LangGraph workflow for auditable resume tailoring."""
 
+from collections.abc import Callable
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -36,8 +37,32 @@ def build_graph(
     backend: AgentBackend,
     checkpointer: Any,
     retriever: HybridRetriever | None = None,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
 ):
     retrieval_engine = retriever or HybridRetriever(DeterministicHashEmbeddings(size=64))
+
+    def observed(name: str, function: Callable[[ResumeState], dict[str, Any]]):
+        def wrapped(state: ResumeState) -> dict[str, Any]:
+            if event_sink:
+                event_sink({"type": "node_started", "node": name, "status": "running"})
+            try:
+                result = function(state)
+            except Exception as error:
+                if event_sink:
+                    event_sink(
+                        {
+                            "type": "node_failed",
+                            "node": name,
+                            "status": "failed",
+                            "error_type": type(error).__name__,
+                        }
+                    )
+                raise
+            if event_sink:
+                event_sink({"type": "node_completed", "node": name, "status": "complete"})
+            return result
+
+        return wrapped
 
     def extract_requirements(state: ResumeState) -> dict[str, Any]:
         result = backend.extract_requirements(state["jd_text"])
@@ -157,6 +182,10 @@ def build_graph(
 
     def human_review(state: ResumeState) -> Command:
         verification = VerificationResult.model_validate(state["verification"])
+        if event_sink:
+            event_sink(
+                {"type": "review_required", "node": "human_review", "status": "waiting"}
+            )
         response = interrupt(
             {
                 "instruction": "Review the verified resume. Approve, edit, or reject it.",
@@ -181,16 +210,16 @@ def build_graph(
         return {"review_status": "rejected"}
 
     builder = StateGraph(ResumeState)
-    builder.add_node("extract_requirements", extract_requirements)
-    builder.add_node("build_evidence_index", build_evidence_index)
-    builder.add_node("retrieve_evidence", retrieve_evidence)
-    builder.add_node("draft_resume", draft_resume)
-    builder.add_node("verify_claims", verify_claims)
-    builder.add_node("prepare_retry", prepare_retry)
-    builder.add_node("safety_gate", safety_gate)
+    builder.add_node("extract_requirements", observed("extract_requirements", extract_requirements))
+    builder.add_node("build_evidence_index", observed("build_evidence_index", build_evidence_index))
+    builder.add_node("retrieve_evidence", observed("retrieve_evidence", retrieve_evidence))
+    builder.add_node("draft_resume", observed("draft_resume", draft_resume))
+    builder.add_node("verify_claims", observed("verify_claims", verify_claims))
+    builder.add_node("prepare_retry", observed("prepare_retry", prepare_retry))
+    builder.add_node("safety_gate", observed("safety_gate", safety_gate))
     builder.add_node("human_review", human_review, ends=("finalize", "reject"))
-    builder.add_node("finalize", finalize)
-    builder.add_node("reject", reject)
+    builder.add_node("finalize", observed("finalize", finalize))
+    builder.add_node("reject", observed("reject", reject))
     builder.add_edge(START, "extract_requirements")
     builder.add_edge("extract_requirements", "build_evidence_index")
     builder.add_edge("build_evidence_index", "retrieve_evidence")

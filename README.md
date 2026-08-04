@@ -72,3 +72,15 @@ The CLI is the product entrypoint. LangGraph coordinates explicit workflow state
 uv run pytest
 uv run resume-agent tailor --help
 ```
+
+## Local Web workbench
+
+Start the framework-free Web interface on the loopback address:
+
+```bash
+uv run resume-agent-web
+```
+
+Open `http://localhost:8765`. The page provides independent LLM and Embedding configuration, connection tests, timeout controls, JD and resume upload, optional supporting sources, live LangGraph node events, and full-screen Markdown review. Model tokens are not streamed; the interface streams workflow events so slow local Embedding calls and failures remain diagnosable.
+
+Non-secret model settings stay in browser storage. API keys remain in page memory unless the page is configured to use `OPENAI_API_KEY` from the server environment. Uploaded inputs and generated artifacts stay under the local `output/<run-id>/` directory.

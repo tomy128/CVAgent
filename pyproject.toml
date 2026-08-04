@@ -5,6 +5,7 @@ description = "Evidence-grounded resume tailoring agent built with LangChain and
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+  "fastapi>=0.116,<1",
   "langchain>=1.0,<2",
   "langchain-openai>=1.0,<2",
   "langchain-text-splitters>=1.0,<2",
@@ -12,6 +13,8 @@ dependencies = [
   "langgraph-checkpoint-sqlite>=3.0,<4",
   "numpy>=2.0,<3",
   "pydantic>=2.10,<3",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn>=0.35,<1",
 ]
 
 [dependency-groups]
@@ -21,6 +24,7 @@ dev = [
 
 [project.scripts]
 resume-agent = "resume_agent.cli:main"
+resume-agent-web = "resume_agent.web.app:main"
 
 [build-system]
 requires = ["hatchling"]

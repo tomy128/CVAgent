@@ -15,6 +15,7 @@ from resume_agent.models import (
     Requirement,
     RequirementSet,
     ResumeClaim,
+    VerificationIssue,
     VerificationResult,
 )
 
@@ -41,6 +42,14 @@ class AgentBackend(ABC):
     @abstractmethod
     def verify_resume(
         self, draft: DraftPackage, chunks: list[EvidenceChunk]
+    ) -> VerificationResult: ...
+
+    @abstractmethod
+    def verify_edited_resume(
+        self,
+        original_resume: str,
+        edited_resume: str,
+        chunks: list[EvidenceChunk],
     ) -> VerificationResult: ...
 
 
@@ -106,16 +115,52 @@ class HeuristicBackend(AgentBackend):
             unsupported_claims=[],
         )
 
+    def verify_edited_resume(
+        self,
+        original_resume: str,
+        edited_resume: str,
+        chunks: list[EvidenceChunk],
+    ) -> VerificationResult:
+        if edited_resume == original_resume:
+            return VerificationResult(corrected_resume_markdown=edited_resume)
+        evidence_by_line: dict[str, list[str]] = {}
+        for line in (item.strip() for item in edited_resume.splitlines()):
+            if not line or line in original_resume:
+                continue
+            evidence_by_line[line] = [item.id for item in chunks if line in item.content]
+        supported = [
+            ResumeClaim(text=line, evidence_ids=ids)
+            for line, ids in evidence_by_line.items()
+            if ids
+        ]
+        unsupported = [
+            VerificationIssue(claim=line, reason="Edited text is absent from supplied evidence")
+            for line, ids in evidence_by_line.items()
+            if not ids
+        ]
+        return VerificationResult(
+            corrected_resume_markdown=edited_resume,
+            supported_claims=supported,
+            unsupported_claims=unsupported,
+        )
+
 
 class LangChainBackend(AgentBackend):
-    def __init__(self, model: str, api_key: str, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        base_url: str | None = None,
+        timeout: float = 90,
+        max_retries: int = 2,
+    ) -> None:
         self.model = ChatOpenAI(
             model=model,
             api_key=api_key,
             base_url=base_url,
             temperature=0,
-            timeout=90,
-            max_retries=2,
+            timeout=timeout,
+            max_retries=max_retries,
         )
 
     def extract_requirements(self, jd_text: str) -> RequirementSet:
@@ -219,3 +264,33 @@ class LangChainBackend(AgentBackend):
         )
         chain = prompt | self.model.with_structured_output(VerificationResult)
         return chain.invoke({"draft": draft.model_dump_json(), "evidence": str(cited)})
+
+    def verify_edited_resume(
+        self,
+        original_resume: str,
+        edited_resume: str,
+        chunks: list[EvidenceChunk],
+    ) -> VerificationResult:
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Verify only factual claims changed between the previously verified resume "
+                    "and the edited resume. Enumerate each changed factual claim, cite only "
+                    "supplied evidence IDs, and flag unsupported edits. Preserve formatting and "
+                    "do not invent replacement facts.",
+                ),
+                (
+                    "human",
+                    "Verified resume:\n{original}\n\nEdited resume:\n{edited}\n\nEvidence:\n{evidence}",
+                ),
+            ]
+        )
+        chain = prompt | self.model.with_structured_output(VerificationResult)
+        return chain.invoke(
+            {
+                "original": original_resume,
+                "edited": edited_resume,
+                "evidence": str([item.model_dump() for item in chunks]),
+            }
+        )
