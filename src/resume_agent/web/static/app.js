@@ -115,6 +115,7 @@ function renderRun() {
       authentication: "认证失败",
       model_not_found: "模型不存在",
       connection_refused: "连接被拒绝",
+      incompatible_input: "Embedding 输入格式不兼容",
       cancelled: "任务已取消",
       workflow: "工作流失败",
     }[error.category] || error.type;

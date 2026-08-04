@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from langchain_openai import OpenAIEmbeddings
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
@@ -19,6 +18,7 @@ from resume_agent.backends import HeuristicBackend, LangChainBackend
 from resume_agent.evidence import load_evidence, read_text_file
 from resume_agent.output import write_artifacts
 from resume_agent.retrieval import DeterministicHashEmbeddings, HybridRetriever
+from resume_agent.web.embedding import build_openai_embeddings
 from resume_agent.web.events import EventStore
 from resume_agent.web.schemas import RunPublic, RunSettings
 from resume_agent.workflow import build_graph
@@ -43,6 +43,8 @@ def classify_error(error: Exception, record: "RunRecord") -> dict[str, object]:
         category = "model_not_found"
     elif any(token in lowered for token in ("connection refused", "failed to connect")):
         category = "connection_refused"
+    elif "invalid input type" in lowered:
+        category = "incompatible_input"
     elif record.cancel_requested:
         category = "cancelled"
     else:
@@ -221,16 +223,8 @@ class RunManager:
             timeout=settings.llm.timeout_seconds,
             max_retries=settings.llm.max_retries,
         )
-        embedding_options: dict[str, Any] = {
-            "model": settings.embedding.model,
-            "api_key": embedding_key,
-            "base_url": settings.embedding.base_url,
-            "request_timeout": settings.embedding.timeout_seconds,
-            "max_retries": settings.embedding.max_retries,
-        }
-        if settings.embedding.dimensions:
-            embedding_options["dimensions"] = settings.embedding.dimensions
-        return backend, HybridRetriever(OpenAIEmbeddings(**embedding_options))
+        embeddings = build_openai_embeddings(settings.embedding, embedding_key)
+        return backend, HybridRetriever(embeddings)
 
     def _execute(
         self,

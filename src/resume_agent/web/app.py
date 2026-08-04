@@ -12,9 +12,10 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
+from resume_agent.web.embedding import build_openai_embeddings
 from resume_agent.web.schemas import ConnectionTestRequest, ReviewRequest, RunSettings
 from resume_agent.web.service import RunManager
 
@@ -86,17 +87,7 @@ def create_app(output_root: Path | None = None, testing: bool = False) -> FastAP
                     temperature=0,
                 ).invoke("Reply with OK only.")
                 return
-            options = {
-                "model": settings.model,
-                "api_key": key,
-                "base_url": settings.base_url,
-                "request_timeout": settings.timeout_seconds,
-                "max_retries": settings.max_retries,
-            }
-            dimensions = getattr(settings, "dimensions", None)
-            if dimensions:
-                options["dimensions"] = dimensions
-            OpenAIEmbeddings(**options).embed_query("connection test")
+            build_openai_embeddings(settings, key).embed_query("connection test")
 
         try:
             await asyncio.to_thread(execute)
@@ -108,6 +99,7 @@ def create_app(output_root: Path | None = None, testing: bool = False) -> FastAP
                 else "authentication" if "401" in lowered or "auth" in lowered
                 else "model_not_found" if "404" in lowered or "model" in lowered and "not found" in lowered
                 else "connection_refused" if "refused" in lowered or "connect" in lowered
+                else "incompatible_input" if "invalid input type" in lowered
                 else "unknown"
             )
             return JSONResponse(

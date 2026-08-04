@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from resume_agent.web.app import create_app
 from resume_agent.web.events import EventStore
+from resume_agent.web.embedding import build_openai_embeddings
 from resume_agent.web.schemas import EmbeddingSettings, ModelSettings, RunSettings
 from resume_agent.web.service import RunRecord, classify_error
 
@@ -173,3 +174,28 @@ def test_timeout_error_is_actionable_and_redacted(tmp_path: Path) -> None:
     assert error["timeout_seconds"] == 300
     assert "embed-secret" not in serialized
     assert "llm-secret" not in serialized
+
+
+def test_embedding_client_sends_raw_text_to_compatible_endpoint() -> None:
+    settings = EmbeddingSettings(
+        model="qwen3-embedding:0.6b",
+        api_key="ollama",
+        base_url="http://localhost:11434/v1",
+        timeout_seconds=300,
+    )
+
+    embeddings = build_openai_embeddings(settings)
+
+    assert embeddings.check_embedding_ctx_length is False
+    assert embeddings.model == "qwen3-embedding:0.6b"
+    assert str(embeddings.openai_api_base) == "http://localhost:11434/v1"
+
+
+def test_invalid_embedding_input_is_classified(tmp_path: Path) -> None:
+    record = RunRecord("run-1", tmp_path, demo_settings(), "now", "now")
+    record.current_node = "retrieve_evidence"
+
+    error = classify_error(ValueError("invalid input type"), record)
+
+    assert error["category"] == "incompatible_input"
+    assert error["service"] == "embedding"
