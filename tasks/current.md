@@ -20,7 +20,12 @@
 - Goal: Persist the approved specification and review it before implementation planning.
 - Acceptance: Design document is committed separately and approved for planning.
 
-## [Pending] Plan implementation
-- Status: Pending
+## [Completed] Plan implementation
+- Status: Completed
 - Goal: Produce an actionable implementation plan with planning and code commit boundaries.
 - Acceptance: Plan is ready for implementation.
+
+## [In Progress] Implement semantic evidence workflow
+- Status: In Progress
+- Goal: Add meaningful LangChain semantic retrieval and a bounded LangGraph verification retry loop.
+- Acceptance: Resume-only and optional-source CLI flows pass offline; hybrid retrieval is auditable; verification retries at most once; all tests pass.
