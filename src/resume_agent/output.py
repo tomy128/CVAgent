@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from resume_agent.models import EvidenceChunk, EvidenceMap, Requirement, VerificationResult
+from resume_agent.models import (
+    EvidenceChunk,
+    EvidenceMap,
+    Requirement,
+    RequirementRetrieval,
+    VerificationResult,
+)
 
 
 def write_artifacts(run_dir: Path, state: dict[str, Any]) -> None:
@@ -19,17 +25,28 @@ def write_artifacts(run_dir: Path, state: dict[str, Any]) -> None:
     }
 
     match_by_requirement = {item.requirement_id: item for item in evidence_map.matches}
+    retrievals = [
+        RequirementRetrieval.model_validate(item)
+        for item in state.get("retrieval_history", [])
+    ]
+    latest_retrieval = {item.requirement_id: item for item in retrievals}
     requirement_lines = ["# Requirement Map", ""]
     for requirement in requirements:
         match = match_by_requirement.get(requirement.id)
         coverage = match.coverage if match else "missing"
         evidence_ids = ", ".join(match.evidence_ids) if match and match.evidence_ids else "None"
+        retrieval = latest_retrieval.get(requirement.id)
+        methods = {
+            method for hit in retrieval.hits for method in hit.methods
+        } if retrieval else set()
         requirement_lines.extend(
             [
                 f"## {requirement.id}: {requirement.description}",
                 f"- Priority: {requirement.priority}",
                 f"- Coverage: {coverage}",
                 f"- Evidence: {evidence_ids}",
+                f"- Retrieval: {', '.join(sorted(methods)) or 'None'}",
+                f"- Attempt: {retrieval.attempt if retrieval else 0}",
                 "",
             ]
         )
@@ -57,6 +74,9 @@ def write_artifacts(run_dir: Path, state: dict[str, Any]) -> None:
         "status": state.get("review_status"),
         "requirement_count": len(requirements),
         "unsupported_claim_count": len(verification.unsupported_claims),
+        "retrieval_attempt": state.get("retrieval_attempt", 0),
+        "retry_reason": state.get("retry_reason", ""),
+        "retrievals": [item.model_dump() for item in retrievals],
     }
     (run_dir / "run.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

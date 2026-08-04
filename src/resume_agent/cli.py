@@ -8,12 +8,14 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from langchain_openai import OpenAIEmbeddings
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from resume_agent.backends import HeuristicBackend, LangChainBackend
 from resume_agent.evidence import load_evidence, read_text_file
 from resume_agent.output import write_artifacts
+from resume_agent.retrieval import DeterministicHashEmbeddings, HybridRetriever
 from resume_agent.workflow import build_graph
 
 
@@ -23,7 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
     tailor = subparsers.add_parser("tailor", help="Tailor a resume to a job description")
     tailor.add_argument("--jd", type=Path, required=True, help="Markdown or text job description")
     tailor.add_argument("--resume", type=Path, required=True, help="Master resume")
-    tailor.add_argument("--evidence", type=Path, help="Directory containing Markdown/text evidence")
+    tailor.add_argument("--sources", type=Path, help="Optional directory of supporting Markdown/text sources")
+    tailor.add_argument("--evidence", type=Path, help="Deprecated alias for --sources")
     tailor.add_argument("--output", type=Path, default=Path("output"), help="Output root")
     tailor.add_argument("--demo", action="store_true", help="Use deterministic offline backend")
     tailor.add_argument("--yes", action="store_true", help="Approve the verified draft automatically")
@@ -44,6 +47,20 @@ def create_backend(args: argparse.Namespace):
     )
 
 
+def create_retriever(args: argparse.Namespace) -> HybridRetriever:
+    if args.demo:
+        return HybridRetriever(DeterministicHashEmbeddings(size=64))
+    dimensions = os.getenv("RESUME_AGENT_EMBEDDING_DIMENSIONS")
+    options: dict[str, object] = {
+        "model": os.getenv("RESUME_AGENT_EMBEDDING_MODEL", "text-embedding-3-small"),
+        "api_key": os.environ["OPENAI_API_KEY"],
+        "base_url": os.getenv("OPENAI_BASE_URL"),
+    }
+    if dimensions:
+        options["dimensions"] = int(dimensions)
+    return HybridRetriever(OpenAIEmbeddings(**options))
+
+
 def ask_for_review(interrupt_value: dict, auto_approve: bool) -> dict:
     resume_markdown = str(interrupt_value.get("resume_markdown", ""))
     if auto_approve:
@@ -58,17 +75,20 @@ def ask_for_review(interrupt_value: dict, auto_approve: bool) -> dict:
 
 
 def run_tailor(args: argparse.Namespace) -> Path:
+    if args.sources and args.evidence:
+        raise ValueError("Use --sources or --evidence, not both")
     jd_text = read_text_file(args.jd)
     master_resume = read_text_file(args.resume)
-    chunks = load_evidence(args.resume, args.evidence)
+    chunks = load_evidence(args.resume, args.sources or args.evidence)
     backend = create_backend(args)
+    retriever = create_retriever(args)
     run_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     run_dir = args.output.expanduser().resolve() / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
 
     connection = sqlite3.connect(run_dir / "checkpoints.sqlite", check_same_thread=False)
     try:
-        graph = build_graph(backend, SqliteSaver(connection))
+        graph = build_graph(backend, SqliteSaver(connection), retriever)
         config = {"configurable": {"thread_id": run_id}}
         state = graph.invoke(
             {

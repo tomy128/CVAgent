@@ -21,6 +21,24 @@ class EvidenceChunk(BaseModel):
     id: str
     source: str
     content: str
+    chunk_index: int = 1
+    content_hash: str = ""
+    source_kind: Literal["resume", "supplemental"] = "supplemental"
+
+
+class RetrievalHit(BaseModel):
+    evidence_id: str
+    methods: list[Literal["lexical", "semantic"]]
+    lexical_rank: int | None = None
+    semantic_rank: int | None = None
+    fused_score: float
+
+
+class RequirementRetrieval(BaseModel):
+    requirement_id: str
+    query: str
+    attempt: int
+    hits: list[RetrievalHit] = Field(default_factory=list)
 
 
 class EvidenceMatch(BaseModel):

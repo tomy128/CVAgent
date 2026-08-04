@@ -3,6 +3,7 @@
 import re
 from abc import ABC, abstractmethod
 
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from resume_agent.evidence import search_evidence, tokenize
@@ -118,12 +119,19 @@ class LangChainBackend(AgentBackend):
         )
 
     def extract_requirements(self, jd_text: str) -> RequirementSet:
-        structured = self.model.with_structured_output(RequirementSet)
-        return structured.invoke(
-            "Extract concrete job requirements from the JD. Assign stable IDs req-01, "
-            "req-02, and so on. Separate required, preferred, and context. Do not add "
-            f"requirements that are absent.\n\nJD:\n{jd_text}"
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Extract concrete job requirements. Assign stable IDs req-01, req-02, "
+                    "and so on. Separate required, preferred, and context. Never add absent "
+                    "requirements.",
+                ),
+                ("human", "JD:\n{jd_text}"),
+            ]
         )
+        chain = prompt | self.model.with_structured_output(RequirementSet)
+        return chain.invoke({"jd_text": jd_text})
 
     def map_evidence(
         self, requirements: list[Requirement], chunks: list[EvidenceChunk]
@@ -132,13 +140,23 @@ class LangChainBackend(AgentBackend):
             requirement.id: [chunk.model_dump() for chunk in search_evidence(requirement, chunks, 6)]
             for requirement in requirements
         }
-        structured = self.model.with_structured_output(EvidenceMap)
-        return structured.invoke(
-            "Map every requirement to only the supplied evidence IDs. Mark missing when "
-            "the evidence does not demonstrate the requirement. Never infer employment, "
-            "production use, duration, scale, or outcomes.\n\n"
-            f"Requirements:\n{RequirementSet(requirements=requirements).model_dump_json()}\n\n"
-            f"Candidate evidence:\n{candidates}"
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Map every requirement to only supplied evidence IDs. Mark missing when "
+                    "evidence is insufficient. Never infer employment, production use, "
+                    "duration, scale, or outcomes.",
+                ),
+                ("human", "Requirements:\n{requirements}\n\nCandidate evidence:\n{candidates}"),
+            ]
+        )
+        chain = prompt | self.model.with_structured_output(EvidenceMap)
+        return chain.invoke(
+            {
+                "requirements": RequirementSet(requirements=requirements).model_dump_json(),
+                "candidates": str(candidates),
+            }
         )
 
     def draft_resume(
@@ -151,16 +169,31 @@ class LangChainBackend(AgentBackend):
     ) -> DraftPackage:
         allowed_ids = {evidence_id for match in evidence_map.matches for evidence_id in match.evidence_ids}
         allowed = [chunk.model_dump() for chunk in chunks if chunk.id in allowed_ids]
-        structured = self.model.with_structured_output(DraftPackage)
-        return structured.invoke(
-            "Tailor the master resume to the JD using only supplied evidence. Preserve factual "
-            "dates, employers, technologies, scale, and outcomes. Every changed or newly "
-            "emphasized factual claim must list supporting evidence IDs. Omit unsupported JD "
-            "requirements rather than fabricating them. Return concise Markdown and interview "
-            "questions that probe the strongest matches and gaps.\n\n"
-            f"JD:\n{jd_text}\n\nMaster resume:\n{master_resume}\n\n"
-            f"Requirements:\n{RequirementSet(requirements=requirements).model_dump_json()}\n\n"
-            f"Evidence map:\n{evidence_map.model_dump_json()}\n\nEvidence:\n{allowed}"
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Tailor the master resume using only supplied evidence. Preserve dates, "
+                    "employers, technologies, scale, and outcomes. Every changed or emphasized "
+                    "factual claim must cite evidence IDs. Omit unsupported requirements. Return "
+                    "concise Markdown and interview questions for matches and gaps.",
+                ),
+                (
+                    "human",
+                    "JD:\n{jd}\n\nMaster resume:\n{resume}\n\nRequirements:\n{requirements}"
+                    "\n\nEvidence map:\n{evidence_map}\n\nEvidence:\n{evidence}",
+                ),
+            ]
+        )
+        chain = prompt | self.model.with_structured_output(DraftPackage)
+        return chain.invoke(
+            {
+                "jd": jd_text,
+                "resume": master_resume,
+                "requirements": RequirementSet(requirements=requirements).model_dump_json(),
+                "evidence_map": evidence_map.model_dump_json(),
+                "evidence": str(allowed),
+            }
         )
 
     def verify_resume(
@@ -173,10 +206,16 @@ class LangChainBackend(AgentBackend):
             for evidence_id in claim.evidence_ids
             if evidence_id in evidence_by_id
         }
-        structured = self.model.with_structured_output(VerificationResult)
-        return structured.invoke(
-            "Act as a strict resume fact checker. A claim is supported only when cited evidence "
-            "explicitly demonstrates it. Remove or weaken unsupported claims in the corrected "
-            "resume. Do not replace them with new facts. Preserve the rest of the resume.\n\n"
-            f"Draft:\n{draft.model_dump_json()}\n\nCited evidence:\n{cited}"
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Act as a strict resume fact checker. Support claims only when cited evidence "
+                    "explicitly demonstrates them. Remove or weaken unsupported claims without "
+                    "adding facts, and preserve the rest of the resume.",
+                ),
+                ("human", "Draft:\n{draft}\n\nCited evidence:\n{evidence}"),
+            ]
         )
+        chain = prompt | self.model.with_structured_output(VerificationResult)
+        return chain.invoke({"draft": draft.model_dump_json(), "evidence": str(cited)})

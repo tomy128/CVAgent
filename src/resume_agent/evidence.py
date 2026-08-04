@@ -4,6 +4,8 @@ import hashlib
 import re
 from pathlib import Path
 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 from resume_agent.models import EvidenceChunk, Requirement
 
 SUPPORTED_SUFFIXES = {".md", ".txt"}
@@ -19,12 +21,12 @@ def read_text_file(path: Path) -> str:
     return resolved.read_text(encoding="utf-8")
 
 
-def load_evidence(resume_path: Path, evidence_dir: Path | None) -> list[EvidenceChunk]:
+def load_evidence(resume_path: Path, sources_dir: Path | None) -> list[EvidenceChunk]:
     paths = [resume_path.expanduser().resolve()]
-    if evidence_dir is not None:
-        root = evidence_dir.expanduser().resolve()
+    if sources_dir is not None:
+        root = sources_dir.expanduser().resolve()
         if not root.is_dir():
-            raise ValueError(f"Evidence directory does not exist: {evidence_dir}")
+            raise ValueError(f"Sources directory does not exist: {sources_dir}")
         paths.extend(
             path for path in sorted(root.rglob("*"))
             if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
@@ -38,22 +40,31 @@ def load_evidence(resume_path: Path, evidence_dir: Path | None) -> list[Evidence
         seen.add(path)
         text = read_text_file(path)
         for index, content in enumerate(split_text(text), start=1):
+            content_hash = hashlib.sha1(content.encode()).hexdigest()
             digest = hashlib.sha1(f"{path}:{index}:{content}".encode()).hexdigest()[:10]
-            chunks.append(EvidenceChunk(id=f"ev-{digest}", source=str(path), content=content))
+            chunks.append(
+                EvidenceChunk(
+                    id=f"ev-{digest}",
+                    source=str(path),
+                    content=content,
+                    chunk_index=index,
+                    content_hash=content_hash,
+                    source_kind="resume" if path == paths[0] else "supplemental",
+                )
+            )
     return chunks
 
 
 def split_text(text: str, max_chars: int = 1200) -> list[str]:
     paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=max_chars,
+        chunk_overlap=0,
+        separators=["\n", " ", ""],
+    )
     chunks: list[str] = []
     for paragraph in paragraphs:
-        if len(paragraph) <= max_chars:
-            chunks.append(paragraph)
-            continue
-        chunks.extend(
-            paragraph[start : start + max_chars]
-            for start in range(0, len(paragraph), max_chars)
-        )
+        chunks.extend(splitter.split_text(paragraph))
     return chunks
 
 

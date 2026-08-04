@@ -25,6 +25,8 @@ def test_load_evidence_is_recursive_and_keeps_sources(tmp_path: Path) -> None:
     assert len(chunks) == 3
     assert {Path(chunk.source).name for chunk in chunks} == {"resume.md", "nonote.md"}
     assert sum(Path(chunk.source).name == "resume.md" for chunk in chunks) == 2
+    assert {chunk.source_kind for chunk in chunks} == {"resume", "supplemental"}
+    assert all(chunk.content_hash and chunk.chunk_index >= 1 for chunk in chunks)
 
 
 def test_lexical_search_returns_matching_chunks() -> None:

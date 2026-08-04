@@ -34,3 +34,38 @@ def test_demo_cli_writes_expected_artifacts(tmp_path: Path) -> None:
     run_dir = next(output.iterdir())
     assert (run_dir / "tailored-resume.md").read_text(encoding="utf-8") == resume.read_text(encoding="utf-8")
     assert json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["status"] == "approved"
+
+
+def test_demo_cli_accepts_resume_without_supplemental_sources(tmp_path: Path) -> None:
+    jd = tmp_path / "jd.md"
+    resume = tmp_path / "resume.md"
+    output = tmp_path / "output"
+    jd.write_text("- Python backend", encoding="utf-8")
+    resume.write_text("# Resume\n\nPython backend engineer", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "tailor", "--jd", str(jd), "--resume", str(resume),
+            "--output", str(output), "--demo", "--yes",
+        ]
+    )
+
+    assert exit_code == 0
+    summary = json.loads((next(output.iterdir()) / "run.json").read_text(encoding="utf-8"))
+    assert summary["retrievals"][0]["hits"]
+
+
+def test_cli_rejects_sources_and_evidence_together(tmp_path: Path) -> None:
+    jd = tmp_path / "jd.md"
+    resume = tmp_path / "resume.md"
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    jd.write_text("- Python", encoding="utf-8")
+    resume.write_text("Python", encoding="utf-8")
+
+    assert main(
+        [
+            "tailor", "--jd", str(jd), "--resume", str(resume),
+            "--sources", str(sources), "--evidence", str(sources), "--demo",
+        ]
+    ) == 1

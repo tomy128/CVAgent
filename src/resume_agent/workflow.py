@@ -11,8 +11,10 @@ from resume_agent.models import (
     EvidenceChunk,
     EvidenceMap,
     Requirement,
+    RequirementRetrieval,
     VerificationResult,
 )
+from resume_agent.retrieval import DeterministicHashEmbeddings, HybridRetriever
 
 
 class ResumeState(TypedDict, total=False):
@@ -23,20 +25,73 @@ class ResumeState(TypedDict, total=False):
     evidence_map: dict[str, Any]
     draft: dict[str, Any]
     verification: dict[str, Any]
+    retrieval_attempt: int
+    retrieval_history: list[dict[str, Any]]
+    retry_reason: str
     final_resume: str
     review_status: str
 
 
-def build_graph(backend: AgentBackend, checkpointer: Any):
+def build_graph(
+    backend: AgentBackend,
+    checkpointer: Any,
+    retriever: HybridRetriever | None = None,
+):
+    retrieval_engine = retriever or HybridRetriever(DeterministicHashEmbeddings(size=64))
+
     def extract_requirements(state: ResumeState) -> dict[str, Any]:
         result = backend.extract_requirements(state["jd_text"])
         return {"requirements": [item.model_dump() for item in result.requirements]}
 
+    def build_evidence_index(state: ResumeState) -> dict[str, Any]:
+        chunks = [EvidenceChunk.model_validate(item) for item in state["evidence_chunks"]]
+        retrieval_engine.build(chunks)
+        return {
+            "retrieval_attempt": state.get("retrieval_attempt", 0),
+            "retrieval_history": state.get("retrieval_history", []),
+        }
+
     def retrieve_evidence(state: ResumeState) -> dict[str, Any]:
         requirements = [Requirement.model_validate(item) for item in state["requirements"]]
         chunks = [EvidenceChunk.model_validate(item) for item in state["evidence_chunks"]]
-        result = backend.map_evidence(requirements, chunks)
-        return {"evidence_map": result.model_dump()}
+        attempt = state.get("retrieval_attempt", 0)
+        verification = VerificationResult.model_validate(state["verification"]) if attempt else None
+        retry_context = [item.claim for item in verification.unsupported_claims] if verification else []
+        retrievals = [
+            retrieval_engine.retrieve(requirement, chunks, attempt, retry_context)
+            for requirement in requirements
+        ]
+        if attempt:
+            previous = {
+                item.requirement_id: item
+                for item in (
+                    RequirementRetrieval.model_validate(raw)
+                    for raw in state.get("retrieval_history", [])
+                )
+                if item.attempt == 0
+            }
+            retrievals = [
+                item.model_copy(
+                    update={
+                        "hits": [
+                            *item.hits,
+                            *[
+                                hit
+                                for hit in previous.get(item.requirement_id, item).hits
+                                if hit.evidence_id not in {current.evidence_id for current in item.hits}
+                            ],
+                        ]
+                    }
+                )
+                for item in retrievals
+            ]
+        candidate_ids = {
+            hit.evidence_id for retrieval in retrievals for hit in retrieval.hits
+        }
+        candidates = [item for item in chunks if item.id in candidate_ids]
+        result = backend.map_evidence(requirements, candidates)
+        history = [*state.get("retrieval_history", []), *[item.model_dump() for item in retrievals]]
+        return {"evidence_map": result.model_dump(), "retrieval_history": history}
 
     def draft_resume(state: ResumeState) -> dict[str, Any]:
         requirements = [Requirement.model_validate(item) for item in state["requirements"]]
@@ -54,6 +109,51 @@ def build_graph(backend: AgentBackend, checkpointer: Any):
         chunks = [EvidenceChunk.model_validate(item) for item in state["evidence_chunks"]]
         result = backend.verify_resume(DraftPackage.model_validate(state["draft"]), chunks)
         return {"verification": result.model_dump()}
+
+    def route_after_verification(state: ResumeState) -> str:
+        result = VerificationResult.model_validate(state["verification"])
+        if result.unsupported_claims and state.get("retrieval_attempt", 0) < 1:
+            return "prepare_retry"
+        return "safety_gate"
+
+    def prepare_retry(state: ResumeState) -> dict[str, Any]:
+        result = VerificationResult.model_validate(state["verification"])
+        return {
+            "retrieval_attempt": 1,
+            "retry_reason": "; ".join(item.claim for item in result.unsupported_claims),
+        }
+
+    def safety_gate(state: ResumeState) -> dict[str, Any]:
+        result = VerificationResult.model_validate(state["verification"])
+        draft = DraftPackage.model_validate(state["draft"])
+        valid_ids = {
+            EvidenceChunk.model_validate(item).id for item in state["evidence_chunks"]
+        }
+        invalid_claims = [
+            claim.text
+            for claim in result.supported_claims
+            if not claim.evidence_ids or any(item not in valid_ids for item in claim.evidence_ids)
+        ]
+        classified = {
+            " ".join(claim.text.lower().split()) for claim in result.supported_claims
+        } | {
+            " ".join(issue.claim.lower().split()) for issue in result.unsupported_claims
+        }
+        unclassified = [
+            claim.text
+            for claim in draft.claims
+            if " ".join(claim.text.lower().split()) not in classified
+        ]
+        normalized_resume = " ".join(result.corrected_resume_markdown.lower().split())
+        remaining = [
+            item.claim
+            for item in result.unsupported_claims
+            if " ".join(item.claim.lower().split()) in normalized_resume
+        ]
+        if invalid_claims or unclassified or remaining:
+            details = ", ".join([*invalid_claims, *unclassified, *remaining])
+            raise RuntimeError(f"Final evidence safety gate failed: {details}")
+        return {}
 
     def human_review(state: ResumeState) -> Command:
         verification = VerificationResult.model_validate(state["verification"])
@@ -82,17 +182,23 @@ def build_graph(backend: AgentBackend, checkpointer: Any):
 
     builder = StateGraph(ResumeState)
     builder.add_node("extract_requirements", extract_requirements)
+    builder.add_node("build_evidence_index", build_evidence_index)
     builder.add_node("retrieve_evidence", retrieve_evidence)
     builder.add_node("draft_resume", draft_resume)
     builder.add_node("verify_claims", verify_claims)
+    builder.add_node("prepare_retry", prepare_retry)
+    builder.add_node("safety_gate", safety_gate)
     builder.add_node("human_review", human_review, ends=("finalize", "reject"))
     builder.add_node("finalize", finalize)
     builder.add_node("reject", reject)
     builder.add_edge(START, "extract_requirements")
-    builder.add_edge("extract_requirements", "retrieve_evidence")
+    builder.add_edge("extract_requirements", "build_evidence_index")
+    builder.add_edge("build_evidence_index", "retrieve_evidence")
     builder.add_edge("retrieve_evidence", "draft_resume")
     builder.add_edge("draft_resume", "verify_claims")
-    builder.add_edge("verify_claims", "human_review")
+    builder.add_conditional_edges("verify_claims", route_after_verification)
+    builder.add_edge("prepare_retry", "retrieve_evidence")
+    builder.add_edge("safety_gate", "human_review")
     builder.add_edge("finalize", END)
     builder.add_edge("reject", END)
     return builder.compile(checkpointer=checkpointer)
