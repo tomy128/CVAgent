@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Fix OpenAI-compatible Embedding input
+- Status: Completed
+- Goal: Send raw text through OpenAI-compatible Embedding endpoints instead of client-tokenized input.
+- Acceptance: Ollama connection tests and production retrieval share the compatible configuration, errors are actionable, and all regression tests pass.
+
 ## [Completed] Implement local Web workbench
 - Status: Completed
 - Goal: Build the approved FastAPI and native Web interface over the existing Resume Agent workflow.
