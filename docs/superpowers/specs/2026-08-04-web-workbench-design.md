@@ -51,15 +51,18 @@ Inputs are stored under `output/<run-id>/inputs/` so a checkpoint can be resumed
 - `GET /api/runs/{run_id}/events`: stream ordered SSE events and honor `Last-Event-ID` on reconnect.
 - `POST /api/runs/{run_id}/review`: approve, approve edited Markdown, or reject the LangGraph interrupt.
 - `POST /api/runs/{run_id}/cancel`: request bounded cancellation.
-- `POST /api/runs/{run_id}/retry`: update allowed model timeout fields and resume from a failed or interrupted node.
+- `POST /api/runs/{run_id}/retry`: retry a failed node with current secret-bearing model configuration and optional timeout/retry changes.
+- `POST /api/runs/{run_id}/resume`: resume an interrupted checkpoint with current secret-bearing model configuration.
 
 Lifecycle states are preparing, running, waiting_review, approved, rejected, failed, cancelling, cancelled, and interrupted. A browser disconnect never cancels a Run. Cancellation is checked between Graph nodes; an active HTTP request may continue until response or timeout.
 
-After server restart, an unfinished Run becomes interrupted. The user explicitly resumes it from its checkpoint; the server never silently repeats an external model request.
+After server restart, an unfinished Run becomes interrupted. Because API keys are never persisted, resume and retry requests must include the current LLM and Embedding credentials again or explicitly select available server-environment credentials. The server validates service identity against the Run's redacted endpoint/model configuration, rebuilds process-local clients and the vector index, then resumes from the checkpoint. It never silently repeats an external model request. A browser refresh without server restart may read Run state but must prompt for a missing key before any new external call.
 
 ## Event model
 
-Every event has monotonically increasing ID, Run ID, timestamp, type, node, status, public summary, duration, and redacted details. Event types cover Run lifecycle, node started/completed/failed/skipped, progress, retry, review required, and result available.
+Every event has monotonically increasing per-Run integer ID, Run ID, timestamp, type, node, status, public summary, duration, and redacted details. Event types cover Run lifecycle, node started/completed/failed/skipped, progress, retry, review required, and result available.
+
+Events are appended transactionally to `output/<run-id>/events.sqlite` before publication. The table uses the integer ID as its primary key and stores the allowlisted payload as JSON. Events are retained for the lifetime of the local Run directory; MVP has no automatic purge. SSE first replays rows whose IDs are greater than `Last-Event-ID`, then subscribes to new committed rows. Server restart therefore preserves replay order. Slow subscribers do not block Graph execution and can reconnect from their last committed ID.
 
 Embedding progress reports completed and total chunks or batches when observable. Events never contain API keys, full prompts, complete uploaded documents, or full generated resumes. Detailed model errors may include endpoint host, model, timeout, HTTP status, and sanitized response summary.
 
@@ -73,7 +76,9 @@ Model timeout errors explicitly show elapsed time, endpoint, model, configured t
 
 ## Result review
 
-Results open in a full-viewport review surface with tabs for tailored resume, requirement map, evidence report, interview questions, and Run details. Markdown results provide rendered and source modes. Source edits update the preview after a short debounce and are submitted with approval.
+Results open in a full-viewport review surface with tabs for tailored resume, requirement map, evidence report, interview questions, and Run details. Markdown results provide rendered and source modes. Source edits update the preview after a short debounce.
+
+Approving an unchanged verified draft resumes the existing approval edge. Approving edited Markdown first routes through a dedicated edited-resume verification node. That node compares the edited text with the last verified draft, enumerates changed factual claims, maps their evidence IDs, and applies the same deterministic safety gate. If verification finds unsupported or unclassified edits, the Run returns to `waiting_review` with issues and cannot finalize. Only a verified edited draft may transition to approved. Reject never requires additional verification.
 
 The fixed review header provides back, reject, and approve actions. A review inspector shows verification status, edits from the master resume, evidence markers, and changed-claim highlighting. The interface never confines the resume to a small dashboard card.
 
@@ -89,12 +94,17 @@ Validation errors attach to their fields. Service errors use typed categories an
 
 Uploaded filenames cannot escape the Run input directory. Markdown raw HTML is disabled and output is sanitized. Secrets are represented only as presence flags. Logs and exception serialization use explicit allowlists rather than attempting to redact arbitrary dictionaries afterward.
 
+The server binds to `127.0.0.1` by default and the MVP does not expose a flag for non-loopback binding. Trusted-host validation permits only `localhost`, `127.0.0.1`, and the actual loopback port. CORS is disabled. The initial same-origin page response establishes an HttpOnly, SameSite=Strict session cookie; every API and SSE request requires that session. State-changing requests also require a server-issued CSRF token in a custom header. This prevents unrelated websites and non-browser network clients from invoking secret-bearing, upload, review, retry, or cancellation endpoints without first loading the local application.
+
+Artifacts are written as an audit snapshot when a Run reaches waiting_review, failed, interrupted, cancelled, or rejected. Approved Runs overwrite the snapshot with final reviewed output. Each snapshot records lifecycle status and remains readable through the Run API; partial files are written atomically via temporary file and rename.
+
 ## Testing and acceptance
 
 - Preserve all existing CLI tests and behavior.
 - API-test configuration validation, secret omission, upload constraints, active-Run exclusion, Run reads, SSE replay, review, cancellation, retry, and recovery.
 - Integration-test deterministic Graph event order, one retry, review interrupt, timeout classification, and interrupted checkpoint recovery.
-- Security-test filename normalization, upload limits, Markdown HTML blocking, and key exclusion from responses/events/logs.
+- Security-test filename normalization, upload limits, Markdown HTML blocking, key exclusion from responses/events/logs, loopback host enforcement, session requirements, and CSRF rejection.
+- Verify edited Markdown cannot finalize until changed claims pass evidence verification.
 - Test pure JavaScript state and formatting modules with Node's built-in test runner; perform browser acceptance for the complete workflow and accessibility states.
 
 The MVP is complete when a user can test separate local services, run with JD and resume only or optional sources, observe Graph and embedding progress, diagnose a simulated timeout, recover without re-uploading, edit rendered/source Markdown in full-screen review, approve or reject, refresh, and still see the final result.
