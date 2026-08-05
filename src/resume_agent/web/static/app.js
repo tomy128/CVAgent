@@ -46,8 +46,7 @@ function serviceSettings(service) {
 }
 function config() { return { llm: serviceSettings("llm"), embedding: serviceSettings("embedding"), demo: $("#demo-mode").checked }; }
 function persistConfig() {
-  const saved = config(); delete saved.llm.api_key; delete saved.embedding.api_key;
-  localStorage.setItem("resume-workbench-config", JSON.stringify(saved));
+  localStorage.setItem("resume-workbench-config", JSON.stringify(config()));
 }
 function restoreConfig() {
   const raw = localStorage.getItem("resume-workbench-config"); if (!raw) return;
@@ -58,10 +57,11 @@ function restoreConfig() {
         const element = $(`#${service}-${field.replace("_seconds", "").replace("max_retries", "retries")}`);
         if (element && saved[service]?.[field] != null) element.value = saved[service][field];
       }
+      if (saved[service]?.api_key != null) $("#" + service + "-api-key").value = saved[service].api_key;
       $(`#${service}-server-key`).checked = Boolean(saved[service]?.use_server_key);
     }
     if (saved.embedding?.dimensions) $("#embedding-dimensions").value = saved.embedding.dimensions;
-    if (saved.llm?.reasoning_effort != null) $("#llm-reasoning").value = saved.llm.reasoning_effort;
+    if (saved.llm && "reasoning_effort" in saved.llm) $("#llm-reasoning").value = saved.llm.reasoning_effort || "";
     if (saved.llm?.max_output_tokens) $("#llm-max-output").value = saved.llm.max_output_tokens;
     $("#demo-mode").checked = Boolean(saved.demo);
   } catch { localStorage.removeItem("resume-workbench-config"); }
@@ -268,6 +268,10 @@ function escapeHtml(text) { return String(text).replace(/[&<>"]/g, (char) => ({ 
 
 restoreConfig();
 bootstrap().catch((error) => toast(error.message));
+$$('#setup-content input:not([type="file"]), #setup-content select').forEach((element) => {
+  element.addEventListener("input", persistConfig);
+  element.addEventListener("change", persistConfig);
+});
 $$('[data-test-service]').forEach((button) => button.addEventListener("click", () => testService(button.dataset.testService)));
 $("#start-run").addEventListener("click", startRun); $("#cancel-run").addEventListener("click", cancelRun);
 $("#resume-run").addEventListener("click", resumeRun); $("#test-after-failure").addEventListener("click", () => testService(state.run?.current_node === "build_evidence_index" ? "embedding" : "llm"));

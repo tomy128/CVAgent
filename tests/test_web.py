@@ -266,3 +266,15 @@ def test_safety_failure_ui_hides_checkpoint_retry() -> None:
 
     assert 'safetyFailure || !["failed", "interrupted"]' in source
     assert '"failure-report.md": "失败报告"' in source
+
+
+def test_all_model_configuration_persists_in_local_storage() -> None:
+    source = (Path(__file__).parents[1] / "src/resume_agent/web/static/app.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'localStorage.setItem("resume-workbench-config", JSON.stringify(config()))' in source
+    assert "delete saved.llm.api_key" not in source
+    assert 'saved[service]?.api_key' in source
+    assert 'input:not([type="file"])' in source
+    assert "sessionStorage" not in source
