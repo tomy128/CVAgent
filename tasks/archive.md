@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Explain and recover from safety gate failures
+- Status: Completed
+- Goal: Turn evidence safety rejection into an understandable, actionable Web state without allowing unsafe override.
+- Acceptance: Failed claims, reports, recovery guidance, and server diagnostics are visible; deterministic retry is hidden; regressions pass.
+
 ## [Completed] Make slow LLM execution observable and controllable
 - Status: Completed
 - Goal: Prevent unnecessary local-model thinking and show continued progress during blocking Graph nodes.
