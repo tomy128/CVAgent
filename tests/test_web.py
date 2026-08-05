@@ -291,3 +291,14 @@ def test_result_viewer_initializes_content_before_rendering() -> None:
     assert '$("#review-actions").classList.toggle("hidden", !actionable)' in source
     assert '$("#markdown-source").readOnly = !actionable' in source
     assert "✕ 事实安全未通过" in source
+
+
+def test_persisted_base_urls_use_explicit_dom_mapping() -> None:
+    source = (Path(__file__).parents[1] / "src/resume_agent/web/static/app.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'base_url: "base-url"' in source
+    assert 'timeout_seconds: "timeout"' in source
+    assert 'max_retries: "retries"' in source
+    assert 'field.replace("_seconds", "")' not in source

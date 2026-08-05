@@ -52,9 +52,15 @@ function restoreConfig() {
   const raw = localStorage.getItem("resume-workbench-config"); if (!raw) return;
   try {
     const saved = JSON.parse(raw);
+    const fieldIds = {
+      base_url: "base-url",
+      model: "model",
+      timeout_seconds: "timeout",
+      max_retries: "retries",
+    };
     for (const service of ["llm", "embedding"]) {
-      for (const field of ["base_url", "model", "timeout_seconds", "max_retries"]) {
-        const element = $(`#${service}-${field.replace("_seconds", "").replace("max_retries", "retries")}`);
+      for (const [field, elementId] of Object.entries(fieldIds)) {
+        const element = $(`#${service}-${elementId}`);
         if (element && saved[service]?.[field] != null) element.value = saved[service][field];
       }
       if (saved[service]?.api_key != null) $("#" + service + "-api-key").value = saved[service].api_key;
