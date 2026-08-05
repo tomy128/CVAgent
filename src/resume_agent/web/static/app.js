@@ -225,11 +225,25 @@ function renderResults() {
   if (state.run?.status === "waiting_review" && results["tailored-resume.md"]) $("#result-status").textContent = "等待你的审核";
 }
 function openReview(name) {
-  state.activeResult = name; state.reviewSource = state.run.results[name] || "";
+  const source = state.run.results[name] || "";
+  state.activeResult = name; state.reviewSource = source;
   $("#review-view").classList.remove("hidden"); $("#review-run-id").textContent = `运行 ${state.run.id}`; $("#review-status").textContent = statusTitle(state.run.status);
-  renderTabs(); setReviewMode("render"); $("#markdown-source").value = state.reviewSource; renderMarkdown();
+  $("#markdown-source").value = source;
+  renderTabs(); setReviewMode("render");
   const actionable = state.run.status === "waiting_review" && name === "tailored-resume.md";
-  $("#approve-review").disabled = !actionable; $("#reject-review").disabled = !actionable;
+  const safetyFailed = state.run.error?.category === "safety_gate";
+  $("#review-actions").classList.toggle("hidden", !actionable);
+  $("#markdown-source").readOnly = !actionable;
+  const message = $("#review-state-message");
+  message.className = safetyFailed ? "danger" : "verified";
+  message.textContent = safetyFailed
+    ? "✕ 事实安全未通过"
+    : actionable ? "等待你的审核" : "✓ 此文件可供查看";
+  $("#review-help").textContent = safetyFailed
+    ? "这是诊断产物，不能批准。请根据失败报告补充证据，或删除、弱化不受支持的内容后新建运行。"
+    : actionable
+      ? "源码模式可以编辑 Markdown。编辑后的内容在提交前需要重新核验。"
+      : "此产物为只读内容，可在渲染和源码模式之间切换。";
 }
 function renderTabs() {
   $("#result-tabs").replaceChildren();

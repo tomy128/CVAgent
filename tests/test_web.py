@@ -278,3 +278,16 @@ def test_all_model_configuration_persists_in_local_storage() -> None:
     assert 'saved[service]?.api_key' in source
     assert 'input:not([type="file"])' in source
     assert "sessionStorage" not in source
+
+
+def test_result_viewer_initializes_content_before_rendering() -> None:
+    source = (Path(__file__).parents[1] / "src/resume_agent/web/static/app.js").read_text(
+        encoding="utf-8"
+    )
+
+    assignment = source.index('$("#markdown-source").value = source;')
+    render = source.index('renderTabs(); setReviewMode("render");', assignment)
+    assert assignment < render
+    assert '$("#review-actions").classList.toggle("hidden", !actionable)' in source
+    assert '$("#markdown-source").readOnly = !actionable' in source
+    assert "✕ 事实安全未通过" in source

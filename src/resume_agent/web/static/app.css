@@ -117,6 +117,7 @@ input:disabled { background: var(--surface-strong); color: var(--muted); }
 .review-inspector h2 { font-size: 13px; margin: 20px 0 5px; }
 .review-inspector p { color: var(--muted); }
 .review-inspector .verified { color: var(--success); }
+.review-inspector .danger { color: var(--danger); font-weight: 650; }
 .view-switch { display: flex; padding: 3px; background: var(--surface-strong); border-radius: var(--radius); }
 .view-switch button { flex: 1; border: 0; padding: 6px; color: var(--muted); background: transparent; border-radius: 5px; cursor: pointer; }
 .view-switch button.active { color: var(--ink); background: var(--bg); box-shadow: 0 1px 2px color-mix(in oklch, var(--ink), transparent 85%); }

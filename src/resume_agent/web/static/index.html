@@ -81,11 +81,11 @@
   </div>
 
   <section class="review-view hidden" id="review-view" aria-label="结果审阅">
-    <header class="review-header"><div><button class="icon-button" id="close-review" type="button" aria-label="返回工作台">←</button><div><strong id="review-run-id">Run</strong><small id="review-status">等待审核</small></div></div><div class="review-actions"><button class="button secondary" id="reject-review" type="button">拒绝</button><button class="button primary" id="approve-review" type="button">批准并保存</button></div></header>
+    <header class="review-header"><div><button class="icon-button" id="close-review" type="button" aria-label="返回工作台">←</button><div><strong id="review-run-id">Run</strong><small id="review-status">等待审核</small></div></div><div class="review-actions" id="review-actions"><button class="button secondary" id="reject-review" type="button">拒绝</button><button class="button primary" id="approve-review" type="button">批准并保存</button></div></header>
     <nav class="result-tabs" id="result-tabs" aria-label="结果文件"></nav>
     <div class="review-layout">
       <main class="document-stage"><article class="markdown-body" id="markdown-preview"></article><textarea class="markdown-source hidden" id="markdown-source" spellcheck="false"></textarea></main>
-      <aside class="review-inspector"><div class="view-switch" role="group" aria-label="Markdown 查看模式"><button class="active" data-view="render" type="button">渲染</button><button data-view="source" type="button">源码</button></div><h2>审阅状态</h2><p class="verified">✓ 事实核验流程已完成</p><h2>查看说明</h2><p>源码模式可以编辑 Markdown。编辑后的内容在提交前需要重新核验。</p></aside>
+      <aside class="review-inspector"><div class="view-switch" role="group" aria-label="Markdown 查看模式"><button class="active" data-view="render" type="button">渲染</button><button data-view="source" type="button">源码</button></div><h2>审阅状态</h2><p class="verified" id="review-state-message">✓ 事实核验流程已完成</p><h2>查看说明</h2><p id="review-help">源码模式可以编辑 Markdown。编辑后的内容在提交前需要重新核验。</p></aside>
     </div>
   </section>
 
