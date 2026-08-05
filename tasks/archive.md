@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Fix persisted Base URL restoration
+- Status: Completed
+- Goal: Restore saved LLM and Embedding Base URLs into their actual form controls.
+- Acceptance: Explicit field mappings restore both services correctly and JavaScript regressions pass.
+
 ## [Completed] Fix result viewer initialization and failure state
 - Status: Completed
 - Goal: Render existing result content reliably and make review controls match the Run and artifact state.
