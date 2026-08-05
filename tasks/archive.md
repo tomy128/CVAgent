@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Make slow LLM execution observable and controllable
+- Status: Completed
+- Goal: Prevent unnecessary local-model thinking and show continued progress during blocking Graph nodes.
+- Acceptance: LLM reasoning/output controls affect tests and Runs consistently; connection testing exercises structured output; active nodes emit elapsed-time heartbeats; regressions pass.
+
 ## [Completed] Fix OpenAI-compatible Embedding input
 - Status: Completed
 - Goal: Send raw text through OpenAI-compatible Embedding endpoints instead of client-tokenized input.
