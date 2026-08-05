@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Persist all local Web configuration
+- Status: Completed
+- Goal: Keep all model settings, secrets, and current Run context across refreshes and browser restarts.
+- Acceptance: LLM and Embedding fields save consistently while editing, restore from localStorage, and regressions pass.
+
 ## [Completed] Explain and recover from safety gate failures
 - Status: Completed
 - Goal: Turn evidence safety rejection into an understandable, actionable Web state without allowing unsafe override.
