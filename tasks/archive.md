@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Fix retry loops, context failures, and cancellation
+- Status: Completed
+- Goal: Make failed-node recovery deterministic, event streaming idempotent, and production Run cancellation immediate.
+- Acceptance: SSE resumes without replay loops; evidence prompts avoid duplicate content; failures identify LLM context exhaustion; retry is single-shot; a production worker process can be terminated; regressions pass.
+
 ## [Completed] Fix persisted Base URL restoration
 - Status: Completed
 - Goal: Restore saved LLM and Embedding Base URLs into their actual form controls.
