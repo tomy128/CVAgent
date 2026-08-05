@@ -22,6 +22,7 @@
           <label>Base URL<input id="llm-base-url" type="url" placeholder="https://api.openai.com/v1"></label>
           <label>API Key<input id="llm-api-key" type="password" autocomplete="off" placeholder="仅保留在当前页面"></label>
           <label>Model<input id="llm-model" value="gpt-5-mini"></label>
+          <div class="field-row generation-row"><label>Reasoning<select id="llm-reasoning"><option value="none" selected>None（推荐）</option><option value="">自动</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label>Max output<input id="llm-max-output" type="number" min="1" max="32768" value="4096"></label></div>
           <div class="field-row"><label>Timeout (s)<input id="llm-timeout" type="number" min="1" max="3600" value="120"></label><label>Retries<input id="llm-retries" type="number" min="0" max="5" value="1"></label></div>
           <label class="check-row"><input id="llm-server-key" type="checkbox"> 使用服务端 API Key</label>
           <button class="button secondary full" type="button" data-test-service="llm">测试 LLM 连接</button>

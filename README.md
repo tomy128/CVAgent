@@ -81,6 +81,6 @@ Start the framework-free Web interface on the loopback address:
 uv run resume-agent-web
 ```
 
-Open `http://localhost:8765`. The page provides independent LLM and Embedding configuration, connection tests, timeout controls, JD and resume upload, optional supporting sources, live LangGraph node events, and full-screen Markdown review. Model tokens are not streamed; the interface streams workflow events so slow local Embedding calls and failures remain diagnosable.
+Open `http://localhost:8765`. The page provides independent LLM and Embedding configuration, representative connection tests, reasoning and output controls, JD and resume upload, optional supporting sources, live LangGraph node events, and full-screen Markdown review. Reasoning defaults to `none` for bounded structured resume tasks. Model tokens are not streamed; five-second workflow heartbeats keep slow model calls observable and report node duration.
 
 Non-secret model settings stay in browser storage. API keys remain in page memory unless the page is configured to use `OPENAI_API_KEY` from the server environment. Uploaded inputs and generated artifacts stay under the local `output/<run-id>/` directory.

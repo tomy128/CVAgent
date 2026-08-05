@@ -1,4 +1,5 @@
 import pytest
+import time
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
@@ -123,3 +124,39 @@ def test_workflow_rejects_claim_omitted_by_verifier() -> None:
             },
             config={"configurable": {"thread_id": "unclassified-claim"}},
         )
+
+
+def test_workflow_emits_heartbeats_and_node_duration() -> None:
+    class SlowBackend(HeuristicBackend):
+        def extract_requirements(self, jd_text):
+            time.sleep(0.04)
+            return super().extract_requirements(jd_text)
+
+    events = []
+    graph = build_graph(
+        SlowBackend(), InMemorySaver(), event_sink=events.append,
+        heartbeat_interval_seconds=0.01,
+    )
+    graph.invoke(
+        {
+            "jd_text": "- Python",
+            "master_resume": "Python engineer",
+            "evidence_chunks": [
+                EvidenceChunk(
+                    id="ev-1", source="resume.md", content="Python engineer"
+                ).model_dump()
+            ],
+        },
+        config={"configurable": {"thread_id": "heartbeat"}},
+    )
+
+    heartbeats = [
+        event for event in events
+        if event["type"] == "node_heartbeat" and event["node"] == "extract_requirements"
+    ]
+    completed = next(
+        event for event in events
+        if event["type"] == "node_completed" and event["node"] == "extract_requirements"
+    )
+    assert heartbeats
+    assert completed["duration_seconds"] >= 0.04

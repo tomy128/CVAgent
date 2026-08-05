@@ -1,6 +1,8 @@
 """LangGraph workflow for auditable resume tailoring."""
 
 from collections.abc import Callable
+import threading
+import time
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -38,16 +40,38 @@ def build_graph(
     checkpointer: Any,
     retriever: HybridRetriever | None = None,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
+    heartbeat_interval_seconds: float = 5,
 ):
     retrieval_engine = retriever or HybridRetriever(DeterministicHashEmbeddings(size=64))
 
     def observed(name: str, function: Callable[[ResumeState], dict[str, Any]]):
         def wrapped(state: ResumeState) -> dict[str, Any]:
+            started = time.monotonic()
+            stopped = threading.Event()
             if event_sink:
                 event_sink({"type": "node_started", "node": name, "status": "running"})
+
+            def heartbeat() -> None:
+                while not stopped.wait(heartbeat_interval_seconds):
+                    if event_sink:
+                        event_sink(
+                            {
+                                "type": "node_heartbeat",
+                                "node": name,
+                                "status": "running",
+                                "elapsed_seconds": round(time.monotonic() - started, 1),
+                            }
+                        )
+
+            heartbeat_thread = threading.Thread(
+                target=heartbeat, daemon=True, name=f"graph-heartbeat-{name}"
+            )
+            if event_sink:
+                heartbeat_thread.start()
             try:
                 result = function(state)
             except Exception as error:
+                stopped.set()
                 if event_sink:
                     event_sink(
                         {
@@ -55,11 +79,21 @@ def build_graph(
                             "node": name,
                             "status": "failed",
                             "error_type": type(error).__name__,
+                            "duration_seconds": round(time.monotonic() - started, 2),
                         }
                     )
                 raise
+            finally:
+                stopped.set()
             if event_sink:
-                event_sink({"type": "node_completed", "node": name, "status": "complete"})
+                event_sink(
+                    {
+                        "type": "node_completed",
+                        "node": name,
+                        "status": "complete",
+                        "duration_seconds": round(time.monotonic() - started, 2),
+                    }
+                )
             return result
 
         return wrapped

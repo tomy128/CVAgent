@@ -79,6 +79,7 @@ class RunRecord:
     error: dict[str, object] | None = None
     cancel_requested: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
+    event_lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
     def event_store(self) -> EventStore:
@@ -132,22 +133,25 @@ class RunManager:
         return data
 
     def _emit(self, record: RunRecord, event: dict[str, Any]) -> None:
-        node = event.get("node")
-        if isinstance(node, str):
-            record.current_node = node
-        record.updated_at = utc_now()
-        record.event_store.append(
-            event_type=str(event.get("type", "progress")),
-            status=str(event.get("status", "running")),
-            summary=self._event_summary(event),
-            node=node if isinstance(node, str) else None,
-            details={
-                key: value
-                for key, value in event.items()
-                if key in {"error_type", "category"}
-            },
-        )
-        self._persist(record)
+        with record.event_lock:
+            node = event.get("node")
+            if isinstance(node, str):
+                record.current_node = node
+            record.updated_at = utc_now()
+            record.event_store.append(
+                event_type=str(event.get("type", "progress")),
+                status=str(event.get("status", "running")),
+                summary=self._event_summary(event),
+                node=node if isinstance(node, str) else None,
+                details={
+                    key: value
+                    for key, value in event.items()
+                    if key in {
+                        "error_type", "category", "elapsed_seconds", "duration_seconds"
+                    }
+                },
+            )
+            self._persist(record)
         if record.cancel_requested and event.get("type") == "node_completed":
             raise RuntimeError("Run cancelled by user")
 
@@ -158,6 +162,9 @@ class RunManager:
             "node_started": f"Started {node}",
             "node_completed": f"Completed {node}",
             "node_failed": f"Failed {node}",
+            "node_heartbeat": (
+                f"{node} is still running · {event.get('elapsed_seconds', 0)}s elapsed"
+            ),
             "review_required": "Waiting for resume review",
         }
         return labels.get(str(event.get("type")), node)
@@ -222,6 +229,8 @@ class RunManager:
             base_url=settings.llm.base_url,
             timeout=settings.llm.timeout_seconds,
             max_retries=settings.llm.max_retries,
+            reasoning_effort=settings.llm.reasoning_effort,
+            max_output_tokens=settings.llm.max_output_tokens,
         )
         embeddings = build_openai_embeddings(settings.embedding, embedding_key)
         return backend, HybridRetriever(embeddings)

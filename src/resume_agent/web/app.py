@@ -12,9 +12,9 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from langchain_openai import ChatOpenAI
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
+from resume_agent.backends import build_chat_model
 from resume_agent.web.embedding import build_openai_embeddings
 from resume_agent.web.schemas import ConnectionTestRequest, ReviewRequest, RunSettings
 from resume_agent.web.service import RunManager
@@ -22,6 +22,10 @@ from resume_agent.web.service import RunManager
 STATIC_DIR = Path(__file__).with_name("static")
 MAX_FILE_SIZE = 5 * 1024 * 1024
 MAX_TOTAL_SIZE = 20 * 1024 * 1024
+
+
+class ConnectionProbe(BaseModel):
+    ok: bool
 
 
 def create_app(output_root: Path | None = None, testing: bool = False) -> FastAPI:
@@ -78,14 +82,18 @@ def create_app(output_root: Path | None = None, testing: bool = False) -> FastAP
             settings = payload.settings
             key = settings.secret(os.getenv("OPENAI_API_KEY"))
             if payload.service == "llm":
-                ChatOpenAI(
-                    model=settings.model,
-                    api_key=key,
-                    base_url=settings.base_url,
-                    timeout=settings.timeout_seconds,
-                    max_retries=settings.max_retries,
-                    temperature=0,
-                ).invoke("Reply with OK only.")
+                model = build_chat_model(
+                    settings.model,
+                    key,
+                    settings.base_url,
+                    settings.timeout_seconds,
+                    settings.max_retries,
+                    settings.reasoning_effort,
+                    settings.max_output_tokens,
+                )
+                model.with_structured_output(ConnectionProbe).invoke(
+                    "Return a structured response with ok set to true."
+                )
                 return
             build_openai_embeddings(settings, key).embed_query("connection test")
 

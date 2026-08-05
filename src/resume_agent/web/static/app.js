@@ -36,6 +36,10 @@ function serviceSettings(service) {
     use_server_key: $(`#${service}-server-key`).checked,
   };
   if (service === "embedding") settings.dimensions = numberValue("#embedding-dimensions") || null;
+  if (service === "llm") {
+    settings.reasoning_effort = value("#llm-reasoning") || null;
+    settings.max_output_tokens = numberValue("#llm-max-output");
+  }
   return settings;
 }
 function config() { return { llm: serviceSettings("llm"), embedding: serviceSettings("embedding"), demo: $("#demo-mode").checked }; }
@@ -55,6 +59,8 @@ function restoreConfig() {
       $(`#${service}-server-key`).checked = Boolean(saved[service]?.use_server_key);
     }
     if (saved.embedding?.dimensions) $("#embedding-dimensions").value = saved.embedding.dimensions;
+    if (saved.llm?.reasoning_effort != null) $("#llm-reasoning").value = saved.llm.reasoning_effort;
+    if (saved.llm?.max_output_tokens) $("#llm-max-output").value = saved.llm.max_output_tokens;
     $("#demo-mode").checked = Boolean(saved.demo);
   } catch { localStorage.removeItem("resume-workbench-config"); }
 }
@@ -122,6 +128,8 @@ function renderRun() {
     const context = [error.service, error.model, `${error.timeout_seconds}s`, error.base_url]
       .filter(Boolean).join(" · ");
     $("#current-summary").textContent = `${category}${context ? ` · ${context}` : ""}`;
+  } else if (state.events.length) {
+    $("#current-summary").textContent = eventSummary(state.events[state.events.length - 1]);
   }
   $("#recovery-actions").classList.toggle("hidden", !["failed", "interrupted"].includes(state.run.status));
   $("#cancel-run").disabled = !["preparing", "running", "waiting_review", "cancelling"].includes(state.run.status);
@@ -148,7 +156,7 @@ function renderGraph() {
 function connectEvents() {
   state.eventSource?.close(); state.eventSource = new EventSource(`/api/runs/${state.run.id}/events`);
   state.eventSource.onmessage = onEvent;
-  for (const type of ["node_started", "node_completed", "node_failed", "review_required", "run_completed", "run_failed"]) state.eventSource.addEventListener(type, onEvent);
+  for (const type of ["node_started", "node_heartbeat", "node_completed", "node_failed", "review_required", "run_completed", "run_failed"]) state.eventSource.addEventListener(type, onEvent);
   state.eventSource.onerror = () => { $("#current-summary").textContent = "事件连接暂时中断，正在自动重连…"; };
 }
 function onEvent(message) {
@@ -157,11 +165,19 @@ function onEvent(message) {
     const mapped = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
     state.nodeStates[event.node] = mapped; state.run.current_node = event.node;
   }
-  $("#current-summary").textContent = event.summary; renderEvents(); renderRun();
+  $("#current-summary").textContent = eventSummary(event); renderEvents(); renderRun();
   if (["review_required", "run_completed", "run_failed"].includes(event.type)) loadRun(state.run.id);
 }
 function renderEvents() {
-  $("#event-list").innerHTML = state.events.slice(-5).reverse().map((event) => `<li><time>${new Date(event.timestamp).toLocaleTimeString([], { hour12: false })}</time>${escapeHtml(event.summary)}</li>`).join("");
+  $("#event-list").innerHTML = state.events.slice(-5).reverse().map((event) => `<li><time>${new Date(event.timestamp).toLocaleTimeString([], { hour12: false })}</time>${escapeHtml(eventSummary(event))}</li>`).join("");
+}
+function eventSummary(event) {
+  if (event.type !== "node_heartbeat") return event.summary;
+  const elapsed = Number(event.details?.elapsed_seconds || 0);
+  const node = graphNodes.find(([id]) => id === event.node)?.[1] || event.node;
+  return elapsed >= 30
+    ? `${node}仍在调用模型 · 已等待 ${elapsed}s，程序仍在运行`
+    : `${node}正在调用模型 · 已等待 ${elapsed}s`;
 }
 async function loadRun(runId) {
   state.run = await api(`/api/runs/${runId}`);

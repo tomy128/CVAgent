@@ -11,6 +11,8 @@ class ModelSettings(BaseModel):
     model: str
     timeout_seconds: float = Field(default=120, ge=1, le=3600)
     max_retries: int = Field(default=1, ge=0, le=5)
+    reasoning_effort: Literal["none", "low", "medium", "high"] | None = "none"
+    max_output_tokens: int = Field(default=4096, ge=1, le=32768)
     use_server_key: bool = False
 
     @field_validator("model")
@@ -35,6 +37,8 @@ class ModelSettings(BaseModel):
             "model": self.model,
             "timeout_seconds": self.timeout_seconds,
             "max_retries": self.max_retries,
+            "reasoning_effort": self.reasoning_effort,
+            "max_output_tokens": self.max_output_tokens,
             "has_api_key": bool(self.api_key),
             "use_server_key": self.use_server_key,
         }

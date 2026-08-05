@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from resume_agent.backends import build_chat_model
 from resume_agent.web.app import create_app
 from resume_agent.web.events import EventStore
 from resume_agent.web.embedding import build_openai_embeddings
@@ -199,3 +200,46 @@ def test_invalid_embedding_input_is_classified(tmp_path: Path) -> None:
 
     assert error["category"] == "incompatible_input"
     assert error["service"] == "embedding"
+
+
+def test_chat_model_applies_reasoning_and_output_limits() -> None:
+    model = build_chat_model(
+        "qwen3.5:4b", "ollama", "http://localhost:11434/v1",
+        reasoning_effort="none", max_output_tokens=4096,
+    )
+
+    assert model.reasoning_effort == "none"
+    assert model.max_tokens == 4096
+
+
+def test_llm_connection_test_uses_structured_output(tmp_path: Path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeModel:
+        def with_structured_output(self, schema):
+            calls.append(schema.__name__)
+            return self
+
+        def invoke(self, prompt):
+            calls.append(prompt)
+
+    monkeypatch.setattr(
+        "resume_agent.web.app.build_chat_model", lambda *args, **kwargs: FakeModel()
+    )
+    client, headers = local_client(tmp_path)
+    response = client.post(
+        "/api/connections/test",
+        headers=headers,
+        json={
+            "service": "llm",
+            "settings": {
+                "model": "qwen3.5:4b",
+                "api_key": "ollama",
+                "reasoning_effort": "none",
+                "max_output_tokens": 4096,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls[0] == "ConnectionProbe"
