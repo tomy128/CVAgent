@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Fix result viewer initialization and failure state
+- Status: Completed
+- Goal: Render existing result content reliably and make review controls match the Run and artifact state.
+- Acceptance: Old and new result files render immediately; failed Runs show failure guidance; unavailable review actions are hidden; regressions pass.
+
 ## [Completed] Persist all local Web configuration
 - Status: Completed
 - Goal: Keep all model settings, secrets, and current Run context across refreshes and browser restarts.
