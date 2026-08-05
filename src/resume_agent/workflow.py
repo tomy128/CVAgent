@@ -35,6 +35,15 @@ class ResumeState(TypedDict, total=False):
     review_status: str
 
 
+class SafetyGateError(RuntimeError):
+    def __init__(self, issues: list[dict[str, str]]) -> None:
+        self.issues = issues
+        super().__init__(
+            "Final evidence safety gate failed: "
+            + "; ".join(item["claim"] for item in issues)
+        )
+
+
 def build_graph(
     backend: AgentBackend,
     checkpointer: Any,
@@ -189,7 +198,10 @@ def build_graph(
             EvidenceChunk.model_validate(item).id for item in state["evidence_chunks"]
         }
         invalid_claims = [
-            claim.text
+            {
+                "claim": claim.text,
+                "reason": "Claim cites missing or invalid evidence IDs.",
+            }
             for claim in result.supported_claims
             if not claim.evidence_ids or any(item not in valid_ids for item in claim.evidence_ids)
         ]
@@ -199,19 +211,24 @@ def build_graph(
             " ".join(issue.claim.lower().split()) for issue in result.unsupported_claims
         }
         unclassified = [
-            claim.text
+            {
+                "claim": claim.text,
+                "reason": "Verifier did not classify this generated claim.",
+            }
             for claim in draft.claims
             if " ".join(claim.text.lower().split()) not in classified
         ]
         normalized_resume = " ".join(result.corrected_resume_markdown.lower().split())
         remaining = [
-            item.claim
+            {
+                "claim": item.claim,
+                "reason": item.reason or "Unsupported claim remains in the final draft.",
+            }
             for item in result.unsupported_claims
             if " ".join(item.claim.lower().split()) in normalized_resume
         ]
         if invalid_claims or unclassified or remaining:
-            details = ", ".join([*invalid_claims, *unclassified, *remaining])
-            raise RuntimeError(f"Final evidence safety gate failed: {details}")
+            raise SafetyGateError([*invalid_claims, *unclassified, *remaining])
         return {}
 
     def human_review(state: ResumeState) -> Command:

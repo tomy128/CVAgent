@@ -67,7 +67,7 @@
         </div>
 
         <section class="run-detail-grid">
-          <div><span class="eyebrow">CURRENT STEP</span><h2 id="current-node">等待开始</h2><p id="current-summary">运行开始后展示当前节点详情。</p><div class="recovery-actions hidden" id="recovery-actions"><button class="button secondary" id="test-after-failure" type="button">测试当前连接</button><button class="button primary" id="resume-run" type="button">使用当前配置重试</button></div><div class="progress-track"><i id="progress-bar"></i></div></div>
+          <div><span class="eyebrow">CURRENT STEP</span><h2 id="current-node">等待开始</h2><p id="current-summary">运行开始后展示当前节点详情。</p><div class="safety-failure hidden" id="safety-failure"><strong>事实安全未通过</strong><p>自动证据重试已经完成，但以下内容仍缺少可靠依据，不能人工强制放行。</p><ul id="safety-issues"></ul><div class="recovery-actions"><button class="button secondary" id="view-failure-report" type="button">查看失败报告</button><button class="button primary" id="new-run" type="button">调整材料后新建运行</button></div></div><div class="recovery-actions hidden" id="recovery-actions"><button class="button secondary" id="test-after-failure" type="button">测试当前连接</button><button class="button primary" id="resume-run" type="button">使用当前配置重试</button></div><div class="progress-track"><i id="progress-bar"></i></div></div>
           <div class="event-column"><span class="eyebrow">RECENT EVENTS</span><ol class="event-list" id="event-list"></ol></div>
         </section>
 

@@ -81,3 +81,37 @@ def write_artifacts(run_dir: Path, state: dict[str, Any]) -> None:
     (run_dir / "run.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def write_failure_artifacts(
+    run_dir: Path,
+    state: dict[str, Any],
+    issues: list[dict[str, str]],
+) -> None:
+    """Write diagnostic artifacts without presenting an unsafe draft as final output."""
+    failure_state = dict(state)
+    verification = VerificationResult.model_validate(failure_state["verification"])
+    failure_state["final_resume"] = verification.corrected_resume_markdown
+    failure_state["review_status"] = "safety_failed"
+    write_artifacts(run_dir, failure_state)
+    final_path = run_dir / "tailored-resume.md"
+    if final_path.exists():
+        final_path.replace(run_dir / "unsafe-draft.md")
+    lines = [
+        "# Evidence Safety Failure",
+        "",
+        "The automatic evidence retry was exhausted. This draft cannot be approved yet.",
+        "",
+        "## Required changes",
+        "",
+    ]
+    for issue in issues:
+        lines.extend([f"- {issue['claim']}", f"  - Reason: {issue['reason']}"])
+    lines.extend(
+        [
+            "",
+            "Add explicit supporting Sources, or remove and weaken these claims before a new Run.",
+            "",
+        ]
+    )
+    (run_dir / "failure-report.md").write_text("\n".join(lines), encoding="utf-8")

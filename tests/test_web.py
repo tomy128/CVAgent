@@ -10,6 +10,7 @@ from resume_agent.web.events import EventStore
 from resume_agent.web.embedding import build_openai_embeddings
 from resume_agent.web.schemas import EmbeddingSettings, ModelSettings, RunSettings
 from resume_agent.web.service import RunRecord, classify_error
+from resume_agent.workflow import SafetyGateError
 
 
 def demo_settings() -> RunSettings:
@@ -243,3 +244,25 @@ def test_llm_connection_test_uses_structured_output(tmp_path: Path, monkeypatch)
 
     assert response.status_code == 200
     assert calls[0] == "ConnectionProbe"
+
+
+def test_safety_failure_is_actionable_without_model_context(tmp_path: Path) -> None:
+    record = RunRecord("run-1", tmp_path, demo_settings(), "now", "now")
+    record.current_node = "safety_gate"
+    error = classify_error(
+        SafetyGateError([{"claim": "Invented scale", "reason": "No evidence"}]),
+        record,
+    )
+
+    assert error["category"] == "safety_gate"
+    assert error["service"] == "workflow"
+    assert error["issues"] == [{"claim": "Invented scale", "reason": "No evidence"}]
+
+
+def test_safety_failure_ui_hides_checkpoint_retry() -> None:
+    source = (Path(__file__).parents[1] / "src/resume_agent/web/static/app.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'safetyFailure || !["failed", "interrupted"]' in source
+    assert '"failure-report.md": "失败报告"' in source

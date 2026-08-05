@@ -6,6 +6,8 @@ const resultLabels = {
   "requirement-map.md": "要求映射",
   "evidence-report.md": "证据报告",
   "interview-questions.md": "面试问题",
+  "failure-report.md": "失败报告",
+  "unsafe-draft.md": "未通过安全检查的草稿",
   "run.json": "运行详情",
 };
 const graphNodes = [
@@ -122,16 +124,33 @@ function renderRun() {
       model_not_found: "模型不存在",
       connection_refused: "连接被拒绝",
       incompatible_input: "Embedding 输入格式不兼容",
+      safety_gate: "事实安全未通过",
       cancelled: "任务已取消",
       workflow: "工作流失败",
     }[error.category] || error.type;
-    const context = [error.service, error.model, `${error.timeout_seconds}s`, error.base_url]
+    const context = [
+      error.service, error.model,
+      error.timeout_seconds != null ? `${error.timeout_seconds}s` : null,
+      error.base_url,
+    ]
       .filter(Boolean).join(" · ");
     $("#current-summary").textContent = `${category}${context ? ` · ${context}` : ""}`;
   } else if (state.events.length) {
     $("#current-summary").textContent = eventSummary(state.events[state.events.length - 1]);
   }
-  $("#recovery-actions").classList.toggle("hidden", !["failed", "interrupted"].includes(state.run.status));
+  const safetyFailure = state.run.error?.category === "safety_gate";
+  $("#safety-failure").classList.toggle("hidden", !safetyFailure);
+  $("#recovery-actions").classList.toggle(
+    "hidden", safetyFailure || !["failed", "interrupted"].includes(state.run.status)
+  );
+  if (safetyFailure) {
+    $("#safety-issues").replaceChildren(...(state.run.error.issues || []).map((issue) => {
+      const item = document.createElement("li");
+      item.textContent = issue.claim;
+      const reason = document.createElement("small"); reason.textContent = issue.reason;
+      item.append(reason); return item;
+    }));
+  }
   $("#cancel-run").disabled = !["preparing", "running", "waiting_review", "cancelling"].includes(state.run.status);
   renderGraph(); renderResults();
 }
@@ -191,6 +210,12 @@ async function loadRun(runId) {
   return state.run;
 }
 function startRefresh() { clearInterval(state.refreshTimer); state.refreshTimer = setInterval(() => state.run && loadRun(state.run.id).catch(() => {}), 1800); }
+function startNewRun() {
+  state.eventSource?.close(); state.run = null; state.events = []; state.startedAt = null;
+  localStorage.removeItem("resume-workbench-run");
+  $("#run-view").classList.add("hidden"); $("#empty-state").classList.remove("hidden");
+  $(".setup-panel").classList.remove("collapsed");
+}
 function renderResults() {
   const results = state.run?.results || {}; $("#result-links").replaceChildren();
   for (const [name, label] of Object.entries(resultLabels)) if (name in results) {
@@ -246,6 +271,8 @@ bootstrap().catch((error) => toast(error.message));
 $$('[data-test-service]').forEach((button) => button.addEventListener("click", () => testService(button.dataset.testService)));
 $("#start-run").addEventListener("click", startRun); $("#cancel-run").addEventListener("click", cancelRun);
 $("#resume-run").addEventListener("click", resumeRun); $("#test-after-failure").addEventListener("click", () => testService(state.run?.current_node === "build_evidence_index" ? "embedding" : "llm"));
+$("#view-failure-report").addEventListener("click", () => openReview("failure-report.md"));
+$("#new-run").addEventListener("click", startNewRun);
 $("#jd-file").addEventListener("change", () => updateFileLabel("#jd-file", "#jd-file-name"));
 $("#resume-file").addEventListener("change", () => updateFileLabel("#resume-file", "#resume-file-name"));
 $("#sources-files").addEventListener("change", () => updateFileLabel("#sources-files", "#sources-file-name"));

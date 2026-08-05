@@ -1,6 +1,7 @@
 """Single-user Run lifecycle service shared by the Web routes."""
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -16,15 +17,16 @@ from langgraph.types import Command
 
 from resume_agent.backends import HeuristicBackend, LangChainBackend
 from resume_agent.evidence import load_evidence, read_text_file
-from resume_agent.output import write_artifacts
+from resume_agent.output import write_artifacts, write_failure_artifacts
 from resume_agent.retrieval import DeterministicHashEmbeddings, HybridRetriever
 from resume_agent.web.embedding import build_openai_embeddings
 from resume_agent.web.events import EventStore
 from resume_agent.web.schemas import RunPublic, RunSettings
-from resume_agent.workflow import build_graph
+from resume_agent.workflow import SafetyGateError, build_graph
 
 ACTIVE_STATUSES = {"preparing", "running", "waiting_review", "cancelling"}
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+LOGGER = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
@@ -35,6 +37,14 @@ def classify_error(error: Exception, record: "RunRecord") -> dict[str, object]:
     """Return a redacted, actionable failure description for the workbench."""
     message = str(error)
     lowered = message.lower()
+    if isinstance(error, SafetyGateError):
+        return {
+            "type": type(error).__name__,
+            "category": "safety_gate",
+            "message": "Evidence safety checks rejected the generated draft.",
+            "service": "workflow",
+            "issues": error.issues,
+        }
     if "timeout" in lowered or "timed out" in lowered:
         category = "timeout"
     elif any(token in lowered for token in ("unauthorized", "authentication", "api key", "401")):
@@ -248,6 +258,8 @@ class RunManager:
             self._persist(record)
             record.event_store.append("run_started", "running", "Run started")
             connection = sqlite3.connect(record.directory / "checkpoints.sqlite", check_same_thread=False)
+            graph = None
+            config = {"configurable": {"thread_id": record.id}}
             try:
                 backend, retriever = self._components(record.settings)
                 graph = build_graph(
@@ -262,7 +274,7 @@ class RunManager:
                             chunk.model_dump() for chunk in load_evidence(resume_path, sources_dir)
                         ],
                     },
-                    config={"configurable": {"thread_id": record.id}},
+                    config=config,
                 )
                 interrupts = state.get("__interrupt__", [])
                 if not interrupts:
@@ -275,12 +287,22 @@ class RunManager:
             except Exception as error:
                 record.status = "cancelled" if record.cancel_requested else "failed"
                 record.error = classify_error(error, record)
+                if isinstance(error, SafetyGateError) and graph is not None:
+                    try:
+                        checkpoint_state = dict(graph.get_state(config).values)
+                        write_failure_artifacts(record.directory, checkpoint_state, error.issues)
+                    except Exception:
+                        LOGGER.exception("Could not write failure artifacts for Run %s", record.id)
+                LOGGER.exception(
+                    "Run %s failed at node %s", record.id, record.current_node
+                )
                 record.event_store.append(
                     "run_failed", record.status, "Run cancelled" if record.cancel_requested else "Run failed",
                     record.current_node,
                     {
                         "error_type": record.error["type"],
                         "category": record.error["category"],
+                        "issues": record.error.get("issues", []),
                     },
                 )
             finally:
@@ -399,6 +421,8 @@ class RunManager:
     def _resume_execute(self, record: RunRecord) -> None:
         with record.lock:
             connection = sqlite3.connect(record.directory / "checkpoints.sqlite", check_same_thread=False)
+            graph = None
+            config = {"configurable": {"thread_id": record.id}}
             try:
                 backend, retriever = self._components(record.settings)
                 graph = build_graph(
@@ -407,7 +431,7 @@ class RunManager:
                 )
                 state = graph.invoke(
                     None,
-                    config={"configurable": {"thread_id": record.id}},
+                    config=config,
                 )
                 interrupts = state.get("__interrupt__", [])
                 if interrupts:
@@ -423,11 +447,21 @@ class RunManager:
             except Exception as error:
                 record.status = "cancelled" if record.cancel_requested else "failed"
                 record.error = classify_error(error, record)
+                if isinstance(error, SafetyGateError) and graph is not None:
+                    try:
+                        checkpoint_state = dict(graph.get_state(config).values)
+                        write_failure_artifacts(record.directory, checkpoint_state, error.issues)
+                    except Exception:
+                        LOGGER.exception("Could not write failure artifacts for Run %s", record.id)
+                LOGGER.exception(
+                    "Resumed Run %s failed at node %s", record.id, record.current_node
+                )
                 record.event_store.append(
                     "run_failed", record.status, "Resumed Run failed", record.current_node,
                     {
                         "error_type": record.error["type"],
                         "category": record.error["category"],
+                        "issues": record.error.get("issues", []),
                     },
                 )
             finally:
@@ -445,7 +479,7 @@ class RunManager:
         results = {}
         for name in (
             "tailored-resume.md", "requirement-map.md", "evidence-report.md",
-            "interview-questions.md", "run.json",
+            "interview-questions.md", "run.json", "failure-report.md", "unsafe-draft.md",
         ):
             path = record.directory / name
             if path.is_file():

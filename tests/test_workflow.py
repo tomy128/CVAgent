@@ -11,7 +11,7 @@ from resume_agent.models import (
     VerificationIssue,
     VerificationResult,
 )
-from resume_agent.workflow import build_graph
+from resume_agent.workflow import SafetyGateError, build_graph
 
 
 def test_workflow_pauses_for_review_and_resumes() -> None:
@@ -93,10 +93,12 @@ def test_workflow_retries_retrieval_once_before_review() -> None:
 def test_workflow_stops_when_second_verification_is_still_unsafe() -> None:
     backend = RetryBackend(fail_twice=True)
 
-    with pytest.raises(RuntimeError, match="safety gate"):
+    with pytest.raises(SafetyGateError, match="safety gate") as caught:
         _invoke_retry_graph(backend, "retry-failure")
 
     assert backend.calls == 2
+    assert caught.value.issues
+    assert all(item["claim"] and item["reason"] for item in caught.value.issues)
 
 
 class UnclassifiedClaimBackend(HeuristicBackend):
