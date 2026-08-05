@@ -26,9 +26,11 @@ Use four-space Python indentation, type annotations, and focused modules. Add re
 
 Product planning and functional implementation must be committed separately. Treat changes under `docs/`, `tasks/`, `plans/`, and similar product-decision or planning paths as planning work. Commit those files independently with a documentation-oriented message, for example `docs: define resume review workflow`.
 
+When one task changes several planning artifacts, consolidate them into one coherent docs commit before implementation. Prefer one primary design document that includes the implementation outline; do not create consecutive commits merely to separate design, plan, approval, and task-state updates. Governance changes such as `AGENTS.md` and the task entry should accompany that same docs commit when they belong to the task. Archive-only changes may wait for the next related docs commit unless the archive itself needs independent review.
+
 Do not include source code, tests, dependency changes, or generated assets in a planning commit. Commit implementation afterward with an appropriate prefix such as `feat:`, `fix:`, or `test:`. When one task requires both planning and implementation, use at least two commits:
 
-1. Planning and task documentation.
+1. Consolidated planning, governance, and task documentation.
 2. Functional code, tests, and implementation-specific configuration.
 
 Before each commit, inspect the staged file list with `git diff --cached --name-only` and unstage files that cross the intended boundary. Changes limited to repository governance files such as `AGENTS.md` may accompany the related planning/task documentation, but never a functional implementation commit.
