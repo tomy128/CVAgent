@@ -2,6 +2,7 @@
 
 import json
 import logging
+import multiprocessing
 import os
 import re
 import sqlite3
@@ -45,7 +46,11 @@ def classify_error(error: Exception, record: "RunRecord") -> dict[str, object]:
             "service": "workflow",
             "issues": error.issues,
         }
-    if "timeout" in lowered or "timed out" in lowered:
+    if type(error).__name__ == "LengthFinishReasonError" or any(
+        token in lowered for token in ("length limit", "context length", "maximum context")
+    ):
+        category = "context_length"
+    elif "timeout" in lowered or "timed out" in lowered:
         category = "timeout"
     elif any(token in lowered for token in ("unauthorized", "authentication", "api key", "401")):
         category = "authentication"
@@ -60,11 +65,16 @@ def classify_error(error: Exception, record: "RunRecord") -> dict[str, object]:
     else:
         category = "workflow"
 
-    service = (
-        "embedding"
-        if record.current_node in {"build_evidence_index", "retrieve_evidence"}
-        else "llm"
-    )
+    if category == "context_length" or record.current_phase == "llm_evidence_mapping":
+        service = "llm"
+    elif (
+        record.current_phase == "embedding_retrieval"
+        or record.current_node == "build_evidence_index"
+        or (record.current_node == "retrieve_evidence" and record.current_phase is None)
+    ):
+        service = "embedding"
+    else:
+        service = "llm"
     settings = getattr(record.settings, service)
     return {
         "type": type(error).__name__,
@@ -86,10 +96,12 @@ class RunRecord:
     updated_at: str
     status: str = "preparing"
     current_node: str | None = None
+    current_phase: str | None = None
     error: dict[str, object] | None = None
     cancel_requested: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
     event_lock: threading.Lock = field(default_factory=threading.Lock)
+    process: Any = field(default=None, repr=False, compare=False)
 
     @property
     def event_store(self) -> EventStore:
@@ -97,27 +109,38 @@ class RunRecord:
 
 
 class RunManager:
-    def __init__(self, output_root: Path) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        process_runs: bool = True,
+        mark_interrupted: bool = True,
+    ) -> None:
         self.output_root = output_root.resolve()
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.runs: dict[str, RunRecord] = {}
         self._lock = threading.Lock()
-        self._load_existing()
+        self.process_runs = process_runs
+        self._process_context = multiprocessing.get_context("spawn")
+        self._load_existing(mark_interrupted)
 
-    def _load_existing(self) -> None:
+    def _load_existing(self, mark_interrupted: bool) -> None:
         for metadata_path in self.output_root.glob("*/web-run.json"):
             try:
                 data = json.loads(metadata_path.read_text(encoding="utf-8"))
                 settings = RunSettings.model_validate(data["config_for_resume"])
                 status = data["status"]
-                if status in ACTIVE_STATUSES:
+                interrupted = mark_interrupted and status in ACTIVE_STATUSES
+                if interrupted:
                     status = "interrupted"
                 self.runs[data["id"]] = RunRecord(
                     id=data["id"], directory=metadata_path.parent, settings=settings,
-                    created_at=data["created_at"], updated_at=utc_now(), status=status,
-                    current_node=data.get("current_node"), error=data.get("error"),
+                    created_at=data["created_at"],
+                    updated_at=utc_now() if interrupted else data["updated_at"], status=status,
+                    current_node=data.get("current_node"),
+                    current_phase=data.get("current_phase"), error=data.get("error"),
                 )
-                self._persist(self.runs[data["id"]])
+                if interrupted:
+                    self._persist(self.runs[data["id"]])
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 continue
 
@@ -128,6 +151,7 @@ class RunManager:
             "created_at": record.created_at,
             "updated_at": record.updated_at,
             "current_node": record.current_node,
+            "current_phase": record.current_phase,
             "error": record.error,
             "config": record.settings.redacted(),
             "config_for_resume": self._settings_without_secrets(record.settings),
@@ -142,11 +166,28 @@ class RunManager:
         data = settings.model_dump(mode="json", exclude={"llm": {"api_key"}, "embedding": {"api_key"}})
         return data
 
+    def _refresh(self, record: RunRecord) -> None:
+        metadata_path = record.directory / "web-run.json"
+        try:
+            data = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        record.status = data.get("status", record.status)
+        record.updated_at = data.get("updated_at", record.updated_at)
+        record.current_node = data.get("current_node")
+        record.current_phase = data.get("current_phase")
+        record.error = data.get("error")
+
     def _emit(self, record: RunRecord, event: dict[str, Any]) -> None:
         with record.event_lock:
             node = event.get("node")
             if isinstance(node, str):
                 record.current_node = node
+            if event.get("type") == "node_started":
+                record.current_phase = None
+            phase = event.get("phase")
+            if isinstance(phase, str):
+                record.current_phase = phase
             record.updated_at = utc_now()
             record.event_store.append(
                 event_type=str(event.get("type", "progress")),
@@ -157,7 +198,8 @@ class RunManager:
                     key: value
                     for key, value in event.items()
                     if key in {
-                        "error_type", "category", "elapsed_seconds", "duration_seconds"
+                        "error_type", "category", "elapsed_seconds", "duration_seconds",
+                        "phase",
                     }
                 },
             )
@@ -175,6 +217,10 @@ class RunManager:
             "node_heartbeat": (
                 f"{node} is still running · {event.get('elapsed_seconds', 0)}s elapsed"
             ),
+            "node_progress": {
+                "embedding_retrieval": "Retrieving semantic evidence",
+                "llm_evidence_mapping": "Mapping evidence with LLM",
+            }.get(str(event.get("phase")), node),
             "review_required": "Waiting for resume review",
         }
         return labels.get(str(event.get("type")), node)
@@ -187,6 +233,8 @@ class RunManager:
         sources: list[tuple[str, bytes]],
     ) -> RunRecord:
         with self._lock:
+            for item in self.runs.values():
+                self._refresh(item)
             if any(item.status in ACTIVE_STATUSES for item in self.runs.values()):
                 raise ValueError("Another Run is active")
             run_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
@@ -203,14 +251,55 @@ class RunManager:
             self.runs[run_id] = record
             self._persist(record)
             record.event_store.append("run_created", "preparing", "Run created")
-            thread = threading.Thread(
-                target=self._execute,
-                args=(record, jd_path, resume_path, sources_dir if sources else None),
-                daemon=True,
-                name=f"resume-run-{run_id}",
-            )
-            thread.start()
+            source_path = sources_dir if sources else None
+            if self.process_runs:
+                self._start_process(
+                    record, _execute_process, jd_path, resume_path, source_path
+                )
+            else:
+                threading.Thread(
+                    target=self._execute,
+                    args=(record, jd_path, resume_path, source_path),
+                    daemon=True,
+                    name=f"resume-run-{run_id}",
+                ).start()
             return record
+
+    def _start_process(self, record: RunRecord, target, *args: object) -> None:
+        process = self._process_context.Process(
+            target=target,
+            args=(self.output_root, record.id, record.settings, *args),
+            daemon=True,
+            name=f"resume-worker-{record.id}",
+        )
+        record.process = process
+        process.start()
+        threading.Thread(
+            target=self._monitor_process,
+            args=(record, process),
+            daemon=True,
+            name=f"resume-monitor-{record.id}",
+        ).start()
+
+    def _monitor_process(self, record: RunRecord, process: Any) -> None:
+        process.join()
+        if record.cancel_requested:
+            return
+        self._refresh(record)
+        if process.exitcode and record.status in ACTIVE_STATUSES:
+            record.status = "failed"
+            record.error = {
+                "type": "WorkerProcessError",
+                "category": "workflow",
+                "message": f"Run worker exited with code {process.exitcode}.",
+                "service": "workflow",
+            }
+            record.updated_at = utc_now()
+            record.event_store.append(
+                "run_failed", "failed", "Run worker stopped unexpectedly",
+                record.current_node, {"exit_code": process.exitcode},
+            )
+            self._persist(record)
 
     @staticmethod
     def _write_upload(directory: Path, fallback: str, upload: tuple[str, bytes]) -> Path:
@@ -375,12 +464,27 @@ class RunManager:
 
     def cancel(self, run_id: str) -> RunRecord:
         record = self.get_record(run_id)
+        self._refresh(record)
+        if record.status == "cancelling" or record.cancel_requested:
+            return record
         if record.status not in ACTIVE_STATUSES:
             raise ValueError("Run is not active")
         record.cancel_requested = True
         if record.status == "waiting_review":
             record.status = "cancelled"
             record.event_store.append("run_cancelled", "cancelled", "Run cancelled")
+        elif record.process is not None and record.process.is_alive():
+            record.process.terminate()
+            record.process.join(timeout=2)
+            if record.process.is_alive():
+                record.process.kill()
+                record.process.join(timeout=2)
+            record.status = "cancelled"
+            record.updated_at = utc_now()
+            record.event_store.append(
+                "run_cancelled", "cancelled", "Run worker terminated",
+                record.current_node,
+            )
         else:
             record.status = "cancelling"
             record.event_store.append("cancel_requested", "cancelling", "Cancellation requested")
@@ -389,6 +493,7 @@ class RunManager:
 
     def resume(self, run_id: str, settings: RunSettings) -> RunRecord:
         record = self.get_record(run_id)
+        self._refresh(record)
         if record.status not in {"failed", "interrupted"}:
             raise ValueError("Only failed or interrupted Runs can resume")
         if not self._same_identity(record.settings, settings):
@@ -400,12 +505,15 @@ class RunManager:
         record.updated_at = utc_now()
         self._persist(record)
         record.event_store.append("run_resumed", "running", "Run resumed from checkpoint")
-        threading.Thread(
-            target=self._resume_execute,
-            args=(record,),
-            daemon=True,
-            name=f"resume-retry-{run_id}",
-        ).start()
+        if self.process_runs:
+            self._start_process(record, _resume_process)
+        else:
+            threading.Thread(
+                target=self._resume_execute,
+                args=(record,),
+                daemon=True,
+                name=f"resume-retry-{run_id}",
+            ).start()
         return record
 
     @staticmethod
@@ -476,6 +584,7 @@ class RunManager:
             raise KeyError("Run not found") from error
 
     def public(self, record: RunRecord) -> RunPublic:
+        self._refresh(record)
         results = {}
         for name in (
             "tailored-resume.md", "requirement-map.md", "evidence-report.md",
@@ -490,3 +599,37 @@ class RunManager:
             error=record.error, config=record.settings.redacted(), results=results,
             events=record.event_store.after(0),
         )
+
+
+def _worker_manager(
+    output_root: Path,
+    run_id: str,
+    settings: RunSettings,
+) -> tuple[RunManager, RunRecord]:
+    manager = RunManager(output_root, process_runs=False, mark_interrupted=False)
+    record = manager.get_record(run_id)
+    record.settings = settings
+    record.cancel_requested = False
+    return manager, record
+
+
+def _execute_process(
+    output_root: Path,
+    run_id: str,
+    settings: RunSettings,
+    jd_path: Path,
+    resume_path: Path,
+    sources_dir: Path | None,
+) -> None:
+    manager, record = _worker_manager(output_root, run_id, settings)
+    manager._execute(record, jd_path, resume_path, sources_dir)
+
+
+def _resume_process(
+    output_root: Path,
+    run_id: str,
+    settings: RunSettings,
+) -> None:
+    manager, record = _worker_manager(output_root, run_id, settings)
+    record.status = "running"
+    manager._resume_execute(record)

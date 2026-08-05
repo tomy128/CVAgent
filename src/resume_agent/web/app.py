@@ -35,7 +35,9 @@ def create_app(output_root: Path | None = None, testing: bool = False) -> FastAP
         allowed_hosts.append("testserver")
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-    app.state.manager = RunManager(output_root or Path("output"))
+    app.state.manager = RunManager(
+        output_root or Path("output"), process_runs=not testing
+    )
     app.state.sessions = {}
 
     async def require_session(

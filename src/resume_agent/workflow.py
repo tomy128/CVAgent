@@ -125,6 +125,15 @@ def build_graph(
         attempt = state.get("retrieval_attempt", 0)
         verification = VerificationResult.model_validate(state["verification"]) if attempt else None
         retry_context = [item.claim for item in verification.unsupported_claims] if verification else []
+        if event_sink:
+            event_sink(
+                {
+                    "type": "node_progress",
+                    "node": "retrieve_evidence",
+                    "status": "running",
+                    "phase": "embedding_retrieval",
+                }
+            )
         retrievals = [
             retrieval_engine.retrieve(requirement, chunks, attempt, retry_context)
             for requirement in requirements
@@ -157,6 +166,15 @@ def build_graph(
             hit.evidence_id for retrieval in retrievals for hit in retrieval.hits
         }
         candidates = [item for item in chunks if item.id in candidate_ids]
+        if event_sink:
+            event_sink(
+                {
+                    "type": "node_progress",
+                    "node": "retrieve_evidence",
+                    "status": "running",
+                    "phase": "llm_evidence_mapping",
+                }
+            )
         result = backend.map_evidence(requirements, candidates)
         history = [*state.get("retrieval_history", []), *[item.model_dump() for item in retrievals]]
         return {"evidence_map": result.model_dump(), "retrieval_history": history}

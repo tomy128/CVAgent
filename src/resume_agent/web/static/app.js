@@ -18,6 +18,7 @@ const graphNodes = [
 ];
 const state = {
   csrf: "", run: null, events: [], eventSource: null, startedAt: null,
+  lastEventId: 0, actionPending: false,
   nodeStates: Object.fromEntries(graphNodes.map(([id]) => [id, "pending"])),
   activeResult: "tailored-resume.md", reviewSource: "", refreshTimer: null,
 };
@@ -110,7 +111,8 @@ async function startRun() {
   for (const source of $("#sources-files").files) form.append("sources", source);
   try {
     state.run = await api("/api/runs", { method: "POST", body: form }); persistConfig();
-    localStorage.setItem("resume-workbench-run", state.run.id); state.startedAt = Date.now(); showRun(); connectEvents(); startRefresh();
+    localStorage.setItem("resume-workbench-run", state.run.id); state.startedAt = Date.now();
+    state.events = []; state.lastEventId = 0; showRun(); connectEvents(); startRefresh();
   } catch (error) { toast(error.message); }
   finally { button.disabled = false; button.textContent = "开始运行"; }
 }
@@ -130,6 +132,7 @@ function renderRun() {
       model_not_found: "模型不存在",
       connection_refused: "连接被拒绝",
       incompatible_input: "Embedding 输入格式不兼容",
+      context_length: "LLM 上下文长度不足",
       safety_gate: "事实安全未通过",
       cancelled: "任务已取消",
       workflow: "工作流失败",
@@ -140,7 +143,10 @@ function renderRun() {
       error.base_url,
     ]
       .filter(Boolean).join(" · ");
-    $("#current-summary").textContent = `${category}${context ? ` · ${context}` : ""}`;
+    const guidance = error.category === "context_length"
+      ? " · 请增大模型上下文窗口，或减少输入材料后新建运行"
+      : "";
+    $("#current-summary").textContent = `${category}${context ? ` · ${context}` : ""}${guidance}`;
   } else if (state.events.length) {
     $("#current-summary").textContent = eventSummary(state.events[state.events.length - 1]);
   }
@@ -157,7 +163,7 @@ function renderRun() {
       item.append(reason); return item;
     }));
   }
-  $("#cancel-run").disabled = !["preparing", "running", "waiting_review", "cancelling"].includes(state.run.status);
+  $("#cancel-run").disabled = state.actionPending || !["preparing", "running", "waiting_review"].includes(state.run.status);
   renderGraph(); renderResults();
 }
 function renderGraph() {
@@ -179,24 +185,34 @@ function renderGraph() {
   $("#graph-list").innerHTML = graphNodes.map(([id, label]) => `<li>${label}：${state.nodeStates[id] || "pending"}</li>`).join("");
 }
 function connectEvents() {
-  state.eventSource?.close(); state.eventSource = new EventSource(`/api/runs/${state.run.id}/events`);
+  state.eventSource?.close();
+  state.eventSource = new EventSource(`/api/runs/${state.run.id}/events?after=${state.lastEventId}`);
   state.eventSource.onmessage = onEvent;
-  for (const type of ["node_started", "node_heartbeat", "node_completed", "node_failed", "review_required", "run_completed", "run_failed"]) state.eventSource.addEventListener(type, onEvent);
+  for (const type of ["node_started", "node_progress", "node_heartbeat", "node_completed", "node_failed", "review_required", "run_completed", "run_failed", "run_cancelled"]) state.eventSource.addEventListener(type, onEvent);
   state.eventSource.onerror = () => { $("#current-summary").textContent = "事件连接暂时中断，正在自动重连…"; };
 }
 function onEvent(message) {
-  const event = JSON.parse(message.data); state.events.push(event); state.events = state.events.slice(-30);
+  const event = JSON.parse(message.data);
+  if (event.id <= state.lastEventId || state.events.some((item) => item.id === event.id)) return;
+  state.lastEventId = event.id; state.events.push(event); state.events = state.events.slice(-30);
   if (event.node) {
     const mapped = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
     state.nodeStates[event.node] = mapped; state.run.current_node = event.node;
   }
   $("#current-summary").textContent = eventSummary(event); renderEvents(); renderRun();
-  if (["review_required", "run_completed", "run_failed"].includes(event.type)) loadRun(state.run.id);
+  if (["review_required", "run_completed", "run_failed", "run_cancelled"].includes(event.type)) {
+    state.eventSource?.close(); state.eventSource = null; loadRun(state.run.id);
+  }
 }
 function renderEvents() {
   $("#event-list").innerHTML = state.events.slice(-5).reverse().map((event) => `<li><time>${new Date(event.timestamp).toLocaleTimeString([], { hour12: false })}</time>${escapeHtml(eventSummary(event))}</li>`).join("");
 }
 function eventSummary(event) {
+  if (event.type === "node_progress") {
+    return event.details?.phase === "embedding_retrieval"
+      ? "正在执行 Embedding 语义检索"
+      : "正在使用 LLM 映射证据";
+  }
   if (event.type !== "node_heartbeat") return event.summary;
   const elapsed = Number(event.details?.elapsed_seconds || 0);
   const node = graphNodes.find(([id]) => id === event.node)?.[1] || event.node;
@@ -207,17 +223,25 @@ function eventSummary(event) {
 async function loadRun(runId) {
   state.run = await api(`/api/runs/${runId}`);
   state.events = state.run.events || [];
+  state.lastEventId = Math.max(0, ...state.events.map((event) => Number(event.id) || 0));
   state.nodeStates = Object.fromEntries(graphNodes.map(([id]) => [id, "pending"]));
   for (const event of state.events) if (event.node) {
     state.nodeStates[event.node] = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
   }
   state.startedAt = Date.parse(state.run.created_at); showRun(); renderEvents();
-  if (["running", "preparing", "waiting_review", "cancelling"].includes(state.run.status)) connectEvents();
+  if (
+    ["running", "preparing", "cancelling"].includes(state.run.status)
+    && (!state.eventSource || state.eventSource.readyState === EventSource.CLOSED)
+  ) connectEvents();
+  else if (!["running", "preparing", "cancelling"].includes(state.run.status)) {
+    state.eventSource?.close(); state.eventSource = null; clearInterval(state.refreshTimer);
+  }
   return state.run;
 }
 function startRefresh() { clearInterval(state.refreshTimer); state.refreshTimer = setInterval(() => state.run && loadRun(state.run.id).catch(() => {}), 1800); }
 function startNewRun() {
-  state.eventSource?.close(); state.run = null; state.events = []; state.startedAt = null;
+  state.eventSource?.close(); state.eventSource = null; clearInterval(state.refreshTimer);
+  state.run = null; state.events = []; state.lastEventId = 0; state.startedAt = null;
   localStorage.removeItem("resume-workbench-run");
   $("#run-view").classList.add("hidden"); $("#empty-state").classList.remove("hidden");
   $(".setup-panel").classList.remove("collapsed");
@@ -275,14 +299,25 @@ async function submitReview(action) {
     $("#review-view").classList.add("hidden"); renderRun(); toast(action === "approve" ? "简历已批准" : "运行已拒绝");
   } catch (error) { toast(error.message); }
 }
-async function cancelRun() { try { state.run = await api(`/api/runs/${state.run.id}/cancel`, { method: "POST" }); renderRun(); } catch (error) { toast(error.message); } }
+async function cancelRun() {
+  if (state.actionPending || !state.run) return;
+  state.actionPending = true; state.run.status = "cancelling"; renderRun();
+  try {
+    state.run = await api(`/api/runs/${state.run.id}/cancel`, { method: "POST" });
+    state.eventSource?.close(); state.eventSource = null; clearInterval(state.refreshTimer); renderRun();
+  } catch (error) { toast(error.message); }
+  finally { state.actionPending = false; renderRun(); }
+}
 async function resumeRun() {
+  if (state.actionPending) return;
+  state.actionPending = true; $("#resume-run").disabled = true;
   try {
     state.run = await api(`/api/runs/${state.run.id}/resume`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config()),
     });
     state.startedAt = Date.now(); renderRun(); connectEvents(); toast("已从 checkpoint 恢复");
   } catch (error) { toast(error.message); }
+  finally { state.actionPending = false; $("#resume-run").disabled = false; }
 }
 function escapeHtml(text) { return String(text).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]); }
 
@@ -294,7 +329,7 @@ $$('#setup-content input:not([type="file"]), #setup-content select').forEach((el
 });
 $$('[data-test-service]').forEach((button) => button.addEventListener("click", () => testService(button.dataset.testService)));
 $("#start-run").addEventListener("click", startRun); $("#cancel-run").addEventListener("click", cancelRun);
-$("#resume-run").addEventListener("click", resumeRun); $("#test-after-failure").addEventListener("click", () => testService(state.run?.current_node === "build_evidence_index" ? "embedding" : "llm"));
+$("#resume-run").addEventListener("click", resumeRun); $("#test-after-failure").addEventListener("click", () => testService(state.run?.error?.service === "embedding" ? "embedding" : "llm"));
 $("#view-failure-report").addEventListener("click", () => openReview("failure-report.md"));
 $("#new-run").addEventListener("click", startNewRun);
 $("#jd-file").addEventListener("change", () => updateFileLabel("#jd-file", "#jd-file-name"));

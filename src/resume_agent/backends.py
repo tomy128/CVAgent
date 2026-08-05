@@ -203,15 +203,13 @@ class LangChainBackend(AgentBackend):
     def map_evidence(
         self, requirements: list[Requirement], chunks: list[EvidenceChunk]
     ) -> EvidenceMap:
-        candidates = {
-            requirement.id: [chunk.model_dump() for chunk in search_evidence(requirement, chunks, 6)]
-            for requirement in requirements
-        }
+        candidates = [chunk.model_dump() for chunk in chunks]
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    "Map every requirement to only supplied evidence IDs. Mark missing when "
+                    "Map every requirement to only supplied evidence IDs. Candidate evidence "
+                    "is shared across requirements and each chunk appears once. Mark missing when "
                     "evidence is insufficient. Never infer employment, production use, "
                     "duration, scale, or outcomes.",
                 ),

@@ -9,7 +9,7 @@ from resume_agent.web.app import create_app
 from resume_agent.web.events import EventStore
 from resume_agent.web.embedding import build_openai_embeddings
 from resume_agent.web.schemas import EmbeddingSettings, ModelSettings, RunSettings
-from resume_agent.web.service import RunRecord, classify_error
+from resume_agent.web.service import RunManager, RunRecord, classify_error
 from resume_agent.workflow import SafetyGateError
 
 
@@ -203,6 +203,23 @@ def test_invalid_embedding_input_is_classified(tmp_path: Path) -> None:
     assert error["service"] == "embedding"
 
 
+def test_length_finish_reason_is_an_llm_context_failure(tmp_path: Path) -> None:
+    class LengthFinishReasonError(RuntimeError):
+        pass
+
+    record = RunRecord("run-1", tmp_path, demo_settings(), "now", "now")
+    record.current_node = "retrieve_evidence"
+    record.current_phase = "llm_evidence_mapping"
+
+    error = classify_error(
+        LengthFinishReasonError("Could not parse response as the length limit was reached"),
+        record,
+    )
+
+    assert error["category"] == "context_length"
+    assert error["service"] == "llm"
+
+
 def test_chat_model_applies_reasoning_and_output_limits() -> None:
     model = build_chat_model(
         "qwen3.5:4b", "ollama", "http://localhost:11434/v1",
@@ -302,3 +319,41 @@ def test_persisted_base_urls_use_explicit_dom_mapping() -> None:
     assert 'timeout_seconds: "timeout"' in source
     assert 'max_retries: "retries"' in source
     assert 'field.replace("_seconds", "")' not in source
+
+
+def test_event_stream_uses_cursor_and_terminal_disconnect() -> None:
+    source = (Path(__file__).parents[1] / "src/resume_agent/web/static/app.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "events?after=${state.lastEventId}" in source
+    assert "event.id <= state.lastEventId" in source
+    assert '["running", "preparing", "cancelling"]' in source
+    assert 'state.actionPending || !["preparing", "running", "waiting_review"]' in source
+
+
+def test_production_worker_can_be_terminated(tmp_path: Path) -> None:
+    manager = RunManager(tmp_path / "output", process_runs=True)
+    record = manager.create(
+        demo_settings(),
+        ("jd.md", b"- Python"),
+        ("resume.md", b"Python engineer"),
+        [],
+    )
+
+    cancelled = manager.cancel(record.id)
+
+    assert cancelled.status == "cancelled"
+    assert cancelled.process is not None
+    assert not cancelled.process.is_alive()
+    events = cancelled.event_store.after(0)
+    assert len([event for event in events if event.type == "run_cancelled"]) == 1
+
+
+def test_evidence_mapping_does_not_duplicate_chunks_per_requirement() -> None:
+    source = (Path(__file__).parents[1] / "src/resume_agent/backends.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "candidates = [chunk.model_dump() for chunk in chunks]" in source
+    assert "candidates = {" not in source
