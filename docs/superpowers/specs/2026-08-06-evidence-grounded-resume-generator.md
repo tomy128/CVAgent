@@ -25,6 +25,8 @@ Generated content has one of three states:
 
 Only verified and deterministically validated reframed content may enter the application resume. Aspirational content is restricted to the target resume, growth plan, and interview preparation. The LLM proposes classifications; ordinary Python validation enforces output boundaries. Edited application resumes must pass the same evidence verification before approval.
 
+An unmatched requirement is a normal `gap`, never a workflow exception. Invalid or unassigned evidence IDs are removed; a match left without evidence is downgraded to `gap` and carried into the growth plan. If a generated section omits evidence or otherwise violates application-resume rules, the chain receives one bounded repair attempt. A second semantic validation failure safely restores that original resume section, records a generation warning, and continues. Recoverable model compliance errors must not discard the rest of a Run.
+
 ## Architecture
 
 Retain the existing Web workbench, local Run process, SSE events, Markdown review, checkpoint foundation, uploads, and model configuration. Remove `src/resume_agent/cli.py`, the `resume-agent` script entry, CLI documentation, and CLI-only compatibility options.
@@ -75,6 +77,8 @@ ingest_inputs
 ```
 
 Graph state stores structured requirements, evidence IDs and rankings, matches, resume sections, gaps, tasks, batch progress, and retry state. It avoids repeated prompts and duplicate source bodies. Matching, resume generation, and verification use small batch subgraphs or explicit loop nodes: prepare batches, process one batch, persist its result, route to the next batch, then finalize. Each batch therefore crosses a real LangGraph node boundary and is checkpointed. The Web groups these internal nodes under one product stage.
+
+Graph state also records normalization, repair, and section-fallback warnings. These warnings appear in the match report, growth plan context, Run details, and live progress without exposing source bodies.
 
 ## Context Discovery and Budgeting
 
