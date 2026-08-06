@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Improve result usability and resume fidelity
+- Status: Completed
+- Goal: Make review actions discoverable, Graph branches explainable, and generated artifacts preserve the input language and professional resume structure.
+- Acceptance: Waiting review has a direct action; executed and skipped nodes are distinguishable; partial matches produce growth guidance; resume artifacts follow the resume language while analysis artifacts follow the JD; deterministic Markdown preserves source facts and avoids unsafe generic rewrites.
+
 ## [Completed] Make model compliance failures recoverable
 - Status: Completed
 - Goal: Convert unsupported JD matches into growth-plan gaps and safely continue when a local model returns invalid evidence metadata.
