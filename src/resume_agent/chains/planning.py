@@ -32,19 +32,7 @@ class GrowthPlanChain:
         if self.model is None:
             return GrowthPlan(
                 tasks=[
-                    GrowthTask(
-                        id=f"task-{index:02d}",
-                        requirement_id=item["requirement"]["id"],
-                        target_capability=item["requirement"]["description"],
-                        priority="high",
-                        estimated_effort="1-3 days",
-                        work="Build a small, reviewable project demonstrating this capability.",
-                        acceptance_checks=["Working code", "Automated test", "Short design note"],
-                        evidence_to_keep=["Repository", "Test output", "Design note"],
-                        future_resume_statement=(
-                            f"Demonstrated {item['requirement']['description']} in a portfolio project."
-                        ),
-                    )
+                    self._fallback_task(item, f"task-{index:02d}")
                     for index, item in enumerate(gaps, start=1)
                 ]
             )
@@ -57,13 +45,46 @@ class GrowthPlanChain:
             "Gaps:\n{gaps}",
             {"gaps": json.dumps(gaps, ensure_ascii=False)},
         )
-        gap_ids = {item["requirement"]["id"] for item in gaps}
-        task_ids = [item.id for item in result.tasks]
-        if len(task_ids) != len(set(task_ids)):
-            raise RuntimeError("Growth plan contains duplicate task IDs")
-        if any(item.requirement_id not in gap_ids for item in result.tasks):
-            raise RuntimeError("Growth plan targets a requirement without a gap")
-        return result
+        gaps_by_id = {item["requirement"]["id"]: item for item in gaps}
+        tasks_by_requirement: dict[str, GrowthTask] = {}
+        used_task_ids: set[str] = set()
+        for task in result.tasks:
+            if (
+                task.requirement_id not in gaps_by_id
+                or task.requirement_id in tasks_by_requirement
+                or task.id in used_task_ids
+            ):
+                continue
+            tasks_by_requirement[task.requirement_id] = task
+            used_task_ids.add(task.id)
+
+        normalized = []
+        for index, item in enumerate(gaps, start=1):
+            requirement_id = item["requirement"]["id"]
+            task = tasks_by_requirement.get(requirement_id)
+            if task is None:
+                task_id = f"task-{index:02d}"
+                while task_id in used_task_ids:
+                    task_id += "-gap"
+                task = self._fallback_task(item, task_id)
+                used_task_ids.add(task_id)
+            normalized.append(task)
+        return GrowthPlan(tasks=normalized)
+
+    @staticmethod
+    def _fallback_task(item: dict, task_id: str) -> GrowthTask:
+        description = item["requirement"]["description"]
+        return GrowthTask(
+            id=task_id,
+            requirement_id=item["requirement"]["id"],
+            target_capability=description,
+            priority="high",
+            estimated_effort="1-3 days",
+            work="Build a small, reviewable project demonstrating this capability.",
+            acceptance_checks=["Working code", "Automated test", "Short design note"],
+            evidence_to_keep=["Repository", "Test output", "Design note"],
+            future_resume_statement=f"Demonstrated {description} in a portfolio project.",
+        )
 
 
 class InterviewPrepChain:

@@ -30,8 +30,7 @@ class MatchingChain:
             "Requirements:\n{requirements}\n\nEvidence:\n{candidates}",
             {"requirements": requirements, "candidates": candidates},
         )
-        self._validate(batch, result)
-        return result
+        return self._normalize(batch, result)
 
     @staticmethod
     def _heuristic_match(requirement, candidates) -> RequirementMatch:
@@ -46,17 +45,54 @@ class MatchingChain:
         )
 
     @staticmethod
-    def _validate(batch: EvidenceBatch, result: MatchBatchResult) -> None:
-        expected = {item.requirement.id for item in batch.assignments}
-        actual = [item.requirement_id for item in result.matches]
-        if set(actual) != expected or len(actual) != len(set(actual)):
-            raise RuntimeError("Requirement matcher returned missing or duplicate results")
+    def _normalize(batch: EvidenceBatch, result: MatchBatchResult) -> MatchBatchResult:
         allowed = {
             item.requirement.id: {candidate.id for candidate in item.candidates}
             for item in batch.assignments
         }
+        returned: dict[str, RequirementMatch] = {}
+        warnings = list(result.warnings)
         for match in result.matches:
-            if any(item not in allowed[match.requirement_id] for item in match.evidence_ids):
-                raise RuntimeError("Requirement matcher cited unassigned evidence")
-            if match.status in {"strong", "partial", "transferable"} and not match.evidence_ids:
-                raise RuntimeError("Supported match status requires evidence")
+            if match.requirement_id not in allowed:
+                warnings.append(
+                    f"Ignored matcher result for unknown requirement {match.requirement_id}."
+                )
+                continue
+            if match.requirement_id in returned:
+                warnings.append(
+                    f"Ignored duplicate matcher result for {match.requirement_id}."
+                )
+                continue
+            valid_ids = [item for item in match.evidence_ids if item in allowed[match.requirement_id]]
+            if valid_ids != match.evidence_ids:
+                warnings.append(
+                    f"Removed unassigned evidence references from {match.requirement_id}."
+                )
+            normalized = match.model_copy(update={"evidence_ids": valid_ids})
+            if normalized.status in {"strong", "partial", "transferable"} and not valid_ids:
+                normalized = normalized.model_copy(update={
+                    "status": "gap",
+                    "missing_capability": normalized.missing_capability
+                    or "The model returned no assigned evidence for this requirement.",
+                    "rationale": normalized.rationale
+                    + " The unsupported match was downgraded to a gap.",
+                })
+                warnings.append(
+                    f"Downgraded {match.requirement_id} to gap because no assigned evidence remained."
+                )
+            returned[match.requirement_id] = normalized
+
+        matches = []
+        for assignment in batch.assignments:
+            requirement_id = assignment.requirement.id
+            match = returned.get(requirement_id)
+            if match is None:
+                match = RequirementMatch(
+                    requirement_id=requirement_id,
+                    status="gap",
+                    rationale="The model omitted this requirement; treated as an evidence gap.",
+                    missing_capability="No reliable match result was returned.",
+                )
+                warnings.append(f"Created a gap for omitted requirement {requirement_id}.")
+            matches.append(match)
+        return MatchBatchResult(matches=matches, warnings=warnings)

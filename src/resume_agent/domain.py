@@ -56,6 +56,7 @@ class RequirementMatch(BaseModel):
 
 class MatchBatchResult(BaseModel):
     matches: list[RequirementMatch]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ResumeClaim(BaseModel):

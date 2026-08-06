@@ -8,6 +8,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from resume_agent.chains import ChainBundle
+from resume_agent.chains.resume import SectionGroundingError
 from resume_agent.context_budget import (
     ContextBudget,
     EvidenceBatch,
@@ -115,6 +116,7 @@ class WorkflowNodes:
             "matching_batches": [serialize_batch(item) for item in batches],
             "matching_cursor": 0,
             "matches": [],
+            "warnings": state.get("warnings", []),
         }
 
     def match_batch(self, state: ResumeState) -> dict[str, Any]:
@@ -151,6 +153,7 @@ class WorkflowNodes:
                 *[item.model_dump() for item in result.matches],
             ],
             "matching_cursor": cursor + 1,
+            "warnings": [*state.get("warnings", []), *result.warnings],
         }
 
     def prepare_resume(self, state: ResumeState) -> dict[str, Any]:
@@ -187,6 +190,27 @@ class WorkflowNodes:
                 ),
                 evidence,
             )
+        except SectionGroundingError as error:
+            warning = (
+                f"Section '{section.heading}' could not be grounded after one repair; "
+                "the original resume section was preserved."
+            )
+            self._emit({
+                "type": "node_progress", "node": "generate_application_resume",
+                "status": "running", "phase": "safe_fallback", "section": section.heading,
+                "warning": warning,
+            })
+            return {
+                "generated_sections": [
+                    *state.get("generated_sections", []),
+                    GeneratedSection(
+                        section_id=section.id,
+                        markdown=section.source_markdown,
+                    ).model_dump(),
+                ],
+                "generation_cursor": cursor + 1,
+                "warnings": [*state.get("warnings", []), warning],
+            }
         except Exception as error:
             if not is_context_overflow(error):
                 raise
@@ -280,7 +304,41 @@ class WorkflowNodes:
                 "repair_attempt": 1,
             }
         if issues:
-            raise SafetyGateError([item.model_dump() for item in issues])
+            source_sections = [
+                ResumeSection.model_validate(item) for item in state["resume_sections"]
+            ]
+            fallback_sections = []
+            warnings = list(state.get("warnings", []))
+            for section in verified:
+                if not section.unsupported_claims:
+                    fallback_sections.append(section)
+                    continue
+                source = max(
+                    (
+                        item for item in source_sections
+                        if section.section_id == item.id
+                        or section.section_id.startswith(f"{item.id}-")
+                    ),
+                    key=lambda item: len(item.id),
+                    default=None,
+                )
+                if source is None:
+                    raise SafetyGateError(
+                        [item.model_dump() for item in section.unsupported_claims]
+                    )
+                warning = (
+                    f"Section '{source.heading}' remained unsupported after verification; "
+                    "the original resume section was preserved."
+                )
+                warnings.append(warning)
+                fallback_sections.append(VerifiedSection(
+                    section_id=section.section_id,
+                    corrected_markdown=source.source_markdown,
+                ))
+            return {
+                "application_resume": merge_sections(fallback_sections),
+                "warnings": warnings,
+            }
         return {"application_resume": merge_sections(verified)}
 
     def analyze_gaps(self, state: ResumeState) -> dict[str, Any]:

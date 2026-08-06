@@ -202,6 +202,7 @@ class RunManager:
                     if key in {
                         "error_type", "category", "elapsed_seconds", "duration_seconds",
                         "phase", "batch_index", "batch_total", "section",
+                        "warning",
                     }
                 },
             )
@@ -224,6 +225,7 @@ class RunManager:
                 "matching": "Matching requirements to evidence",
                 "generation": "Generating an application-resume section",
                 "verification": "Verifying an application-resume section",
+                "safe_fallback": "Preserved the original resume section and continued safely",
             }.get(str(event.get("phase")), node),
             "review_required": "Waiting for resume review",
         }

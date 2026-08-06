@@ -17,6 +17,7 @@ def _match_report(
     requirements: list[Requirement],
     matches: list[RequirementMatch],
     retrievals: list[RequirementRetrieval],
+    warnings: list[str],
 ) -> str:
     match_by_id = {item.requirement_id: item for item in matches}
     retrieval_by_id = {item.requirement_id: item for item in retrievals}
@@ -35,6 +36,10 @@ def _match_report(
         ])
         if match.missing_capability:
             lines.append(f"- Gap: {match.missing_capability}")
+        lines.append("")
+    if warnings:
+        lines.extend(["## Normalization and fallback warnings", ""])
+        lines.extend(f"- {warning}" for warning in warnings)
         lines.append("")
     return "\n".join(lines)
 
@@ -81,10 +86,11 @@ def write_artifacts(run_dir: Path, state: dict[str, Any]) -> None:
     plan = GrowthPlan.model_validate(state.get("growth_plan", {}))
     prep = InterviewPrep.model_validate(state.get("interview_prep", {}))
     application_resume = state.get("final_resume") or state.get("application_resume", "")
+    warnings = list(state.get("warnings", []))
 
     artifacts = {
         "application-resume.md": application_resume,
-        "match-report.md": _match_report(requirements, matches, retrievals),
+        "match-report.md": _match_report(requirements, matches, retrievals, warnings),
         "growth-plan.md": _growth_plan(plan),
         "interview-prep.md": _interview_prep(prep),
     }
@@ -105,6 +111,7 @@ def write_artifacts(run_dir: Path, state: dict[str, Any]) -> None:
         "matching_batches": len(state.get("matching_batches", [])),
         "resume_sections": len(state.get("resume_sections", [])),
         "retrievals": [item.model_dump() for item in retrievals],
+        "warnings": warnings,
     }
     (run_dir / "run.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

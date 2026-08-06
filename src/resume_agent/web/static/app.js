@@ -229,6 +229,9 @@ function renderEvents() {
 }
 function eventSummary(event) {
   if (event.type === "node_progress") {
+    if (event.details?.phase === "safe_fallback") {
+      return `模型输出无法可靠核验，已保留原章节并继续${event.details?.section ? ` · ${event.details.section}` : ""}`;
+    }
     return event.details?.phase === "embedding_retrieval"
       ? "正在执行 Embedding 语义检索"
       : event.details?.batch_total

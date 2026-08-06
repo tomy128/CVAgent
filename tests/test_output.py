@@ -18,6 +18,7 @@ def test_outputs_isolate_application_and_aspirational_content(tmp_path) -> None:
             "future_resume_statement": "Built a Kubernetes lab",
         }]},
         "interview_prep": {"items": []},
+        "warnings": ["Requirement req-01 was downgraded to a gap."],
     }
 
     write_artifacts(tmp_path, state)
@@ -26,3 +27,5 @@ def test_outputs_isolate_application_and_aspirational_content(tmp_path) -> None:
     assert "Kubernetes" not in application
     assert "NOT FOR SUBMISSION" in (tmp_path / "target-resume.md").read_text()
     assert "Test passes" in (tmp_path / "growth-plan.md").read_text()
+    assert "downgraded to a gap" in (tmp_path / "match-report.md").read_text()
+    assert "downgraded to a gap" in (tmp_path / "run.json").read_text()

@@ -12,6 +12,7 @@ class ResumeState(TypedDict, total=False):
     matching_batches: list[list[dict[str, Any]]]
     matching_cursor: int
     matches: list[dict[str, Any]]
+    warnings: list[str]
     resume_sections: list[dict[str, Any]]
     generation_cursor: int
     generated_sections: list[dict[str, Any]]
