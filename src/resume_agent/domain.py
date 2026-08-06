@@ -73,10 +73,35 @@ class ResumeSection(BaseModel):
     source_markdown: str
 
 
+class ResumeEntry(BaseModel):
+    id: str
+    section_id: str
+    kind: Literal["paragraph", "bullet"]
+    source_text: str
+    source_index: int
+
+
+class ResumeEditDecision(BaseModel):
+    source_entry_id: str
+    action: Literal["keep", "move", "rewrite", "omit"]
+    revised_text: str = ""
+    priority: int = 100
+    rationale: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class ResumeEditResult(BaseModel):
+    section_id: str
+    section_priority: int = 100
+    decisions: list[ResumeEditDecision] = Field(default_factory=list)
+
+
 class GeneratedSection(BaseModel):
     section_id: str
     markdown: str
     claims: list[ResumeClaim] = Field(default_factory=list)
+    priority: int = 100
+    warnings: list[str] = Field(default_factory=list)
 
 
 class VerificationIssue(BaseModel):
@@ -89,6 +114,7 @@ class VerifiedSection(BaseModel):
     corrected_markdown: str
     supported_claims: list[ResumeClaim] = Field(default_factory=list)
     unsupported_claims: list[VerificationIssue] = Field(default_factory=list)
+    priority: int = 100
 
 
 class GrowthTask(BaseModel):

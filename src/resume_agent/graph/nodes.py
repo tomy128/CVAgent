@@ -33,6 +33,7 @@ from resume_agent.graph.subgraphs import (
     serialize_batch,
     split_markdown_block,
 )
+from resume_agent.language import detect_run_languages, message
 from resume_agent.retrieval import HybridRetriever
 from resume_agent.sections import merge_sections, split_markdown_sections
 
@@ -95,9 +96,41 @@ class WorkflowNodes:
         if self.event_sink:
             self.event_sink(event)
 
+    @staticmethod
+    def _language_state(state: ResumeState) -> dict[str, Any]:
+        if state.get("analysis_language") and state.get("resume_language"):
+            return {}
+        analysis, resume = detect_run_languages(
+            state.get("jd_text", ""), state.get("master_resume", "")
+        )
+        return {
+            "schema_version": 2,
+            "analysis_language": analysis.language or "en",
+            "resume_language": resume.language or "en",
+            "language_detection": {
+                "analysis": analysis.as_dict(), "resume": resume.as_dict()
+            },
+        }
+
+    def _language(self, state: ResumeState, key: str) -> str:
+        return str(state.get(key) or self._language_state(state)[key])
+
     def extract_requirements(self, state: ResumeState) -> dict[str, Any]:
-        result = self.chains.requirements.invoke(state["jd_text"])
-        return {"requirements": [item.model_dump() for item in result.requirements]}
+        analysis, resume = detect_run_languages(
+            state["jd_text"], state["master_resume"]
+        )
+        result = self.chains.requirements.invoke(
+            state["jd_text"], analysis.language or "en"
+        )
+        return {
+            "schema_version": 2,
+            "analysis_language": analysis.language or "en",
+            "resume_language": resume.language or "en",
+            "language_detection": {
+                "analysis": analysis.as_dict(), "resume": resume.as_dict()
+            },
+            "requirements": [item.model_dump() for item in result.requirements],
+        }
 
     def build_evidence_index(self, state: ResumeState) -> dict[str, Any]:
         chunks = [EvidenceChunk.model_validate(item) for item in state["evidence_chunks"]]
@@ -128,7 +161,9 @@ class WorkflowNodes:
         })
         batch = deserialize_batch(batches[cursor])
         try:
-            result = self.chains.matching.invoke(batch)
+            result = self.chains.matching.invoke(
+                batch, self._language(state, "analysis_language")
+            )
         except Exception as error:
             if not is_context_overflow(error):
                 raise
@@ -154,6 +189,7 @@ class WorkflowNodes:
             ],
             "matching_cursor": cursor + 1,
             "warnings": [*state.get("warnings", []), *result.warnings],
+            **self._language_state(state),
         }
 
     def prepare_resume(self, state: ResumeState) -> dict[str, Any]:
@@ -186,13 +222,20 @@ class WorkflowNodes:
         try:
             result = invoke_with_reduced_evidence(
                 lambda selected: self.chains.resume.invoke(
-                    section, requirements, matches, selected
+                    section,
+                    requirements,
+                    matches,
+                    selected,
+                    self._language(state, "resume_language"),
+                    self._language(state, "analysis_language"),
                 ),
                 evidence,
             )
         except SectionGroundingError as error:
             warning = (
-                f"Section '{section.heading}' could not be grounded after one repair; "
+                f"章节“{section.heading}”修复后仍无法可靠核验，已保留原始简历章节。"
+                if self._language(state, "analysis_language") == "zh"
+                else f"Section '{section.heading}' could not be grounded after one repair; "
                 "the original resume section was preserved."
             )
             self._emit({
@@ -210,6 +253,7 @@ class WorkflowNodes:
                 ],
                 "generation_cursor": cursor + 1,
                 "warnings": [*state.get("warnings", []), warning],
+                **self._language_state(state),
             }
         except Exception as error:
             if not is_context_overflow(error):
@@ -232,6 +276,8 @@ class WorkflowNodes:
                 *state.get("generated_sections", []), result.model_dump()
             ],
             "generation_cursor": cursor + 1,
+            "warnings": [*state.get("warnings", []), *result.warnings],
+            **self._language_state(state),
         }
 
     def prepare_verification(self, state: ResumeState) -> dict[str, Any]:
@@ -261,7 +307,10 @@ class WorkflowNodes:
         })
         try:
             result = invoke_with_reduced_evidence(
-                lambda selected: self.chains.verification.invoke(section, selected), evidence
+                lambda selected: self.chains.verification.invoke(
+                    section, selected, self._language(state, "resume_language")
+                ),
+                evidence,
             )
         except Exception as error:
             if not is_context_overflow(error):
@@ -298,6 +347,7 @@ class WorkflowNodes:
                         section_id=item.section_id,
                         markdown=item.corrected_markdown,
                         claims=item.supported_claims,
+                        priority=item.priority,
                     ).model_dump()
                     for item in verified
                 ],
@@ -327,13 +377,16 @@ class WorkflowNodes:
                         [item.model_dump() for item in section.unsupported_claims]
                     )
                 warning = (
-                    f"Section '{source.heading}' remained unsupported after verification; "
+                    f"章节“{source.heading}”核验后仍缺少可靠证据，已保留原始简历章节。"
+                    if self._language(state, "analysis_language") == "zh"
+                    else f"Section '{source.heading}' remained unsupported after verification; "
                     "the original resume section was preserved."
                 )
                 warnings.append(warning)
                 fallback_sections.append(VerifiedSection(
                     section_id=section.section_id,
                     corrected_markdown=source.source_markdown,
+                    priority=section.priority,
                 ))
             return {
                 "application_resume": merge_sections(fallback_sections),
@@ -343,19 +396,33 @@ class WorkflowNodes:
 
     def analyze_gaps(self, state: ResumeState) -> dict[str, Any]:
         matches = [RequirementMatch.model_validate(item) for item in state["matches"]]
-        return {"has_gaps": any(item.status in {"transferable", "gap"} for item in matches)}
+        has_gaps = any(item.status in {"partial", "transferable", "gap"} for item in matches)
+        if not has_gaps:
+            for node in ("generate_growth_plan", "generate_target_resume"):
+                self._emit({
+                    "type": "node_skipped", "node": node, "status": "skipped",
+                    "reason_code": "no_actionable_gap",
+                })
+        return {"has_gaps": has_gaps, **self._language_state(state)}
 
     def generate_growth_plan(self, state: ResumeState) -> dict[str, Any]:
         requirements = [Requirement.model_validate(item) for item in state["requirements"]]
         matches = [RequirementMatch.model_validate(item) for item in state["matches"]]
-        return {"growth_plan": self.chains.growth.invoke(requirements, matches).model_dump()}
+        return {"growth_plan": self.chains.growth.invoke(
+            requirements,
+            matches,
+            self._language(state, "analysis_language"),
+            self._language(state, "resume_language"),
+        ).model_dump()}
 
     def generate_target_resume(self, state: ResumeState) -> dict[str, Any]:
         plan = GrowthPlan.model_validate(state["growth_plan"])
+        language = self._language(state, "resume_language")
         lines = [
-            "# Target Resume — NOT FOR SUBMISSION", "",
-            "> ⚠ TARGET: The statements below are aspirational until their linked tasks are completed.",
-            "", state["application_resume"].strip(), "", "## Aspirational additions", "",
+            f"# {message(language, 'target_resume')}", "",
+            f"> {message(language, 'target_warning')}",
+            "", state["application_resume"].strip(), "",
+            f"## {message(language, 'aspirational_additions')}", "",
         ]
         lines.extend(
             f"- ⚠ TARGET `{task.id}`: {task.future_resume_statement}" for task in plan.tasks
@@ -365,7 +432,9 @@ class WorkflowNodes:
     def generate_interview_prep(self, state: ResumeState) -> dict[str, Any]:
         requirements = [Requirement.model_validate(item) for item in state["requirements"]]
         matches = [RequirementMatch.model_validate(item) for item in state["matches"]]
-        return {"interview_prep": self.chains.interview.invoke(requirements, matches).model_dump()}
+        return {"interview_prep": self.chains.interview.invoke(
+            requirements, matches, self._language(state, "analysis_language")
+        ).model_dump()}
 
     def human_review(self, state: ResumeState) -> dict[str, Any]:
         decision = interrupt({"resume_markdown": state["application_resume"]})

@@ -23,6 +23,7 @@ from resume_agent.domain import GeneratedSection, Requirement, ResumeClaim
 from resume_agent.evidence import load_evidence, read_text_file
 from resume_agent.graph import SafetyGateError, build_graph
 from resume_agent.output import write_artifacts, write_failure_artifacts
+from resume_agent.language import inspect_language
 from resume_agent.retrieval import DeterministicHashEmbeddings, HybridRetriever
 from resume_agent.sections import split_markdown_sections
 from resume_agent.web.embedding import build_openai_embeddings
@@ -203,6 +204,7 @@ class RunManager:
                         "error_type", "category", "elapsed_seconds", "duration_seconds",
                         "phase", "batch_index", "batch_total", "section",
                         "warning",
+                        "reason_code",
                     }
                 },
             )
@@ -217,6 +219,11 @@ class RunManager:
             "node_started": f"Started {node}",
             "node_completed": f"Completed {node}",
             "node_failed": f"Failed {node}",
+            "node_skipped": (
+                "Skipped because no actionable capability gap was found"
+                if event.get("reason_code") == "no_actionable_gap"
+                else f"Skipped {node}"
+            ),
             "node_heartbeat": (
                 f"{node} is still running · {event.get('elapsed_seconds', 0)}s elapsed"
             ),
@@ -496,7 +503,10 @@ class RunManager:
                     )
                 ],
             )
-            result = chains.verification.invoke(generated, evidence)
+            detected = inspect_language(edited, "edited_resume")
+            result = chains.verification.invoke(
+                generated, evidence, detected.language or "en"
+            )
             unsupported.extend(item.claim for item in result.unsupported_claims)
             if result.corrected_markdown != section.source_markdown:
                 unsupported.append(section.source_markdown)

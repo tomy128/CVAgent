@@ -29,3 +29,28 @@ def test_outputs_isolate_application_and_aspirational_content(tmp_path) -> None:
     assert "Test passes" in (tmp_path / "growth-plan.md").read_text()
     assert "downgraded to a gap" in (tmp_path / "match-report.md").read_text()
     assert "downgraded to a gap" in (tmp_path / "run.json").read_text()
+
+
+def test_resume_and_analysis_artifacts_use_independent_languages(tmp_path) -> None:
+    state = {
+        "analysis_language": "en",
+        "resume_language": "zh",
+        "requirements": [{"id": "req-01", "category": "skill", "description": "Kubernetes"}],
+        "matches": [{
+            "requirement_id": "req-01", "status": "gap", "evidence_ids": [],
+            "rationale": "No evidence", "missing_capability": "Kubernetes",
+        }],
+        "retrievals": [{"requirement_id": "req-01", "query": "Kubernetes", "hits": []}],
+        "application_resume": "# 中文简历\n\n后端开发工程师",
+        "target_resume": "# 目标简历（不可投递）\n\n后端开发工程师",
+        "growth_plan": {"tasks": []},
+        "interview_prep": {"items": []},
+    }
+
+    write_artifacts(tmp_path, state)
+
+    assert (tmp_path / "application-resume.md").read_text().startswith("# 中文简历")
+    assert (tmp_path / "target-resume.md").read_text().startswith("# 目标简历")
+    assert (tmp_path / "match-report.md").read_text().startswith("# Match Report")
+    assert (tmp_path / "growth-plan.md").read_text().startswith("# Growth Plan")
+    assert (tmp_path / "interview-prep.md").read_text().startswith("# Interview Preparation")

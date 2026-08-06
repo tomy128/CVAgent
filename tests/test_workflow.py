@@ -61,3 +61,35 @@ def test_each_batch_crosses_a_graph_checkpoint_boundary() -> None:
 
     assert state["matching_cursor"] >= 1
     assert {"match_batch", "generate_section", "verify_section"} <= completed_nodes
+
+
+def test_no_actionable_gap_emits_explicit_skipped_events() -> None:
+    events = []
+    graph = build_graph(
+        build_chain_bundle(None),
+        InMemorySaver(),
+        HybridRetriever(DeterministicHashEmbeddings()),
+        ContextBudget(4096, 1024),
+        event_sink=events.append,
+    )
+    state = graph.invoke(
+        {
+            "jd_text": "Python backend engineering and API development experience",
+            "master_resume": "# Resume\n\nPython backend engineering and API development",
+            "evidence_chunks": [
+                EvidenceChunk(
+                    id=f"ev-{index}", source=f"source-{index}.md", source_kind="resume",
+                    content="Python backend engineering and API development experience",
+                ).model_dump()
+                for index in range(2)
+            ],
+        },
+        config={"configurable": {"thread_id": "skipped"}},
+    )
+
+    skipped = [event for event in events if event.get("type") == "node_skipped"]
+    assert "__interrupt__" in state
+    assert {event["node"] for event in skipped} == {
+        "generate_growth_plan", "generate_target_resume"
+    }
+    assert all(event["reason_code"] == "no_actionable_gap" for event in skipped)

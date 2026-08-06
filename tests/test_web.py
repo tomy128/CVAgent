@@ -318,6 +318,20 @@ def test_result_viewer_initializes_content_before_rendering() -> None:
     assert "⚠ 目标版本不可直接投递" in source
 
 
+def test_waiting_review_has_a_direct_and_keyboard_accessible_action() -> None:
+    root = Path(__file__).parents[1] / "src/resume_agent/web/static"
+    source = (root / "app.js").read_text(encoding="utf-8")
+    html = (root / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="open-application-review"' in html
+    assert "生成已完成，请审核可投递简历" in source
+    assert 'group.setAttribute("role", "button")' in source
+    assert 'group.setAttribute("tabindex", "0")' in source
+    assert '["Enter", " "].includes(event.key)' in source
+    assert 'openReview("application-resume.md")' in source
+    assert 'event.status === "skipped" ? "skipped"' in source
+
+
 def test_persisted_base_urls_use_explicit_dom_mapping() -> None:
     source = (Path(__file__).parents[1] / "src/resume_agent/web/static/app.js").read_text(
         encoding="utf-8"

@@ -170,6 +170,9 @@ function renderRun() {
   } else if (state.events.length) {
     $("#current-summary").textContent = eventSummary(state.events[state.events.length - 1]);
   }
+  const waitingReview = state.run.status === "waiting_review" && Boolean(state.run.results?.["application-resume.md"]);
+  if (waitingReview) $("#current-summary").textContent = "生成已完成，请审核可投递简历。";
+  $("#review-required-action").classList.toggle("hidden", !waitingReview);
   const safetyFailure = state.run.error?.category === "safety_gate";
   $("#safety-failure").classList.toggle("hidden", !safetyFailure);
   $("#recovery-actions").classList.toggle(
@@ -198,17 +201,25 @@ function renderGraph() {
     const group = document.createElementNS(ns, "g"); group.setAttribute("class", `node ${state.nodeStates[id] || "pending"}`);
     const rect = document.createElementNS(ns, "rect"); rect.setAttribute("x", x); rect.setAttribute("y", y); rect.setAttribute("width", 84); rect.setAttribute("height", 52);
     const text = document.createElementNS(ns, "text"); text.setAttribute("x", x + 42); text.setAttribute("y", y + 31); text.textContent = label;
+    if (id === "human_review" && state.run?.status === "waiting_review") {
+      group.classList.add("actionable"); group.setAttribute("role", "button"); group.setAttribute("tabindex", "0");
+      group.setAttribute("aria-label", "打开可投递简历人工审核");
+      group.addEventListener("click", openApplicationReview);
+      group.addEventListener("keydown", (event) => {
+        if (["Enter", " "].includes(event.key)) { event.preventDefault(); openApplicationReview(); }
+      });
+    }
     group.append(rect, text); svg.append(group);
   });
-  const completeCount = Object.values(state.nodeStates).filter((status) => ["complete", "waiting"].includes(status)).length;
-  $("#progress-bar").style.width = `${Math.max(4, Math.round(completeCount / graphNodes.length * 100))}%`;
+  const completeCount = Object.values(state.nodeStates).filter((status) => ["complete", "waiting", "skipped"].includes(status)).length;
+  $("#progress-bar").style.transform = `scaleX(${Math.max(.04, completeCount / graphNodes.length)})`;
   $("#graph-list").innerHTML = graphNodes.map(([id, label]) => `<li>${label}：${state.nodeStates[id] || "pending"}</li>`).join("");
 }
 function connectEvents() {
   state.eventSource?.close();
   state.eventSource = new EventSource(`/api/runs/${state.run.id}/events?after=${state.lastEventId}`);
   state.eventSource.onmessage = onEvent;
-  for (const type of ["node_started", "node_progress", "node_heartbeat", "node_completed", "node_failed", "review_required", "run_completed", "run_failed", "run_cancelled"]) state.eventSource.addEventListener(type, onEvent);
+  for (const type of ["node_started", "node_progress", "node_heartbeat", "node_completed", "node_failed", "node_skipped", "review_required", "run_completed", "run_failed", "run_cancelled"]) state.eventSource.addEventListener(type, onEvent);
   state.eventSource.onerror = () => { $("#current-summary").textContent = "事件连接暂时中断，正在自动重连…"; };
 }
 function onEvent(message) {
@@ -216,7 +227,7 @@ function onEvent(message) {
   if (event.id <= state.lastEventId || state.events.some((item) => item.id === event.id)) return;
   state.lastEventId = event.id; state.events.push(event); state.events = state.events.slice(-30);
   if (event.node) {
-    const mapped = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
+    const mapped = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : event.status === "skipped" ? "skipped" : "running";
     state.nodeStates[stageForNode(event.node)] = mapped; state.run.current_node = event.node;
   }
   $("#current-summary").textContent = eventSummary(event); renderEvents(); renderRun();
@@ -228,6 +239,8 @@ function renderEvents() {
   $("#event-list").innerHTML = state.events.slice(-5).reverse().map((event) => `<li><time>${new Date(event.timestamp).toLocaleTimeString([], { hour12: false })}</time>${escapeHtml(eventSummary(event))}</li>`).join("");
 }
 function eventSummary(event) {
+  if (event.type === "review_required") return "生成已完成，请审核可投递简历";
+  if (event.type === "node_skipped") return event.details?.reason_code === "no_actionable_gap" ? "未发现需提升项，已跳过该步骤" : "该步骤已跳过";
   if (event.type === "node_progress") {
     if (event.details?.phase === "safe_fallback") {
       return `模型输出无法可靠核验，已保留原章节并继续${event.details?.section ? ` · ${event.details.section}` : ""}`;
@@ -251,7 +264,7 @@ async function loadRun(runId) {
   state.lastEventId = Math.max(0, ...state.events.map((event) => Number(event.id) || 0));
   state.nodeStates = Object.fromEntries(graphNodes.map(([id]) => [id, "pending"]));
   for (const event of state.events) if (event.node) {
-    state.nodeStates[stageForNode(event.node)] = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
+    state.nodeStates[stageForNode(event.node)] = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : event.status === "skipped" ? "skipped" : "running";
   }
   state.startedAt = Date.parse(state.run.created_at); showRun(); renderEvents();
   if (
@@ -304,6 +317,9 @@ function openReview(name) {
       ? "源码模式可以编辑 Markdown。编辑后的内容在提交前需要重新核验。"
       : "此产物为只读内容，可在渲染和源码模式之间切换。";
 }
+function openApplicationReview() {
+  if (state.run?.status === "waiting_review" && state.run.results?.["application-resume.md"]) openReview("application-resume.md");
+}
 function renderTabs() {
   $("#result-tabs").replaceChildren();
   for (const [name, label] of Object.entries(resultLabels)) if (name in state.run.results) {
@@ -323,6 +339,7 @@ function setReviewMode(mode) {
   if (mode === "render") renderMarkdown();
 }
 async function submitReview(action) {
+  if (action === "reject" && !window.confirm("拒绝会结束本次运行，并且不会自动重新生成。确定拒绝吗？")) return;
   try {
     state.run = await api(`/api/runs/${state.run.id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, resume_markdown: $("#markdown-source").value }) });
     $("#review-view").classList.add("hidden"); renderRun(); toast(action === "approve" ? "简历已批准" : "运行已拒绝");
@@ -361,6 +378,7 @@ $("#start-run").addEventListener("click", startRun); $("#cancel-run").addEventLi
 $("#resume-run").addEventListener("click", resumeRun); $("#test-after-failure").addEventListener("click", () => testService(state.run?.error?.service === "embedding" ? "embedding" : "llm"));
 $("#view-failure-report").addEventListener("click", () => openReview("failure-report.md"));
 $("#new-run").addEventListener("click", startNewRun);
+$("#open-application-review").addEventListener("click", openApplicationReview);
 $("#jd-file").addEventListener("change", () => updateFileLabel("#jd-file", "#jd-file-name"));
 $("#resume-file").addEventListener("change", () => updateFileLabel("#resume-file", "#resume-file-name"));
 $("#sources-files").addEventListener("change", () => updateFileLabel("#sources-files", "#sources-file-name"));

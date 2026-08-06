@@ -4,8 +4,12 @@ from typing import Any, TypedDict
 
 
 class ResumeState(TypedDict, total=False):
+    schema_version: int
     jd_text: str
     master_resume: str
+    analysis_language: str
+    resume_language: str
+    language_detection: dict[str, Any]
     evidence_chunks: list[dict[str, Any]]
     requirements: list[dict[str, Any]]
     retrievals: list[dict[str, Any]]

@@ -47,23 +47,26 @@ def test_matcher_downgrades_unassigned_evidence_and_fills_omissions() -> None:
     assert len(normalized.warnings) == 3
 
 
-def test_each_gap_has_a_deterministic_growth_task_in_demo_mode() -> None:
+def test_each_non_strong_match_has_a_deterministic_growth_task_in_demo_mode() -> None:
     requirements = [
         Requirement(id="req-1", category="skill", description="Kubernetes"),
         Requirement(id="req-2", category="skill", description="Go"),
+        Requirement(id="req-3", category="skill", description="Python"),
     ]
     matches = [
         RequirementMatch(
             requirement_id=item.id,
-            status="gap",
+            status=status,
             rationale="No evidence",
         )
-        for item in requirements
+        for item, status in zip(
+            requirements, ("partial", "transferable", "gap"), strict=True
+        )
     ]
 
     plan = GrowthPlanChain(None).invoke(requirements, matches)
 
-    assert [item.requirement_id for item in plan.tasks] == ["req-1", "req-2"]
+    assert [item.requirement_id for item in plan.tasks] == ["req-1", "req-2", "req-3"]
 
 
 class FailingResumeChain:

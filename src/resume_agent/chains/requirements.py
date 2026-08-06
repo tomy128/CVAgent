@@ -7,22 +7,24 @@ from langchain_core.language_models import BaseChatModel
 from resume_agent.chains.common import invoke_structured
 from resume_agent.domain import Requirement, RequirementSet
 from resume_agent.evidence import tokenize
+from resume_agent.language import LANGUAGE_NAMES
 
 
 class RequirementsChain:
     def __init__(self, model: BaseChatModel | None) -> None:
         self.model = model
 
-    def invoke(self, jd_text: str) -> RequirementSet:
+    def invoke(self, jd_text: str, language: str = "en") -> RequirementSet:
         if self.model is None:
             return self._heuristic(jd_text)
         return invoke_structured(
             self.model,
             RequirementSet,
             "Extract only concrete job requirements. Assign stable IDs req-01 onward. "
-            "Separate required, preferred, and contextual requirements.",
+            "Separate required, preferred, and contextual requirements. Write descriptions, "
+            "categories, and keywords in {language}.",
             "Job description:\n{jd}",
-            {"jd": jd_text},
+            {"jd": jd_text, "language": LANGUAGE_NAMES.get(language, "English")},
         )
 
     @staticmethod

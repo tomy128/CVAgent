@@ -74,18 +74,28 @@ input:disabled { background: var(--surface-strong); color: var(--muted); }
 .graph .node.complete text { fill: color-mix(in oklch, var(--primary), black 25%); }
 .graph .node.failed rect { fill: color-mix(in oklch, var(--danger), white 90%); stroke: var(--danger); }
 .graph .node.waiting rect { fill: color-mix(in oklch, var(--warning), white 88%); stroke: var(--warning); }
+.graph .node.skipped rect { fill: var(--surface); stroke: var(--border); stroke-dasharray: 4 3; }
+.graph .node.skipped text { fill: var(--muted); }
+.graph .node.actionable { cursor: pointer; }
+.graph .node.actionable rect { stroke-width: 2; }
+.graph .node.actionable:hover rect { stroke: var(--primary); }
+.graph .node.actionable:focus-visible { outline: none; }
+.graph .node.actionable:focus-visible rect { stroke: var(--focus); stroke-width: 3; }
 .run-detail-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(260px, .7fr); gap: 34px; padding: 20px 0 28px; }
 .run-detail-grid h2 { font-size: 17px; margin: 3px 0; }
 .run-detail-grid p { color: var(--muted); }
 .progress-track { height: 6px; background: var(--surface-strong); border-radius: 9px; overflow: hidden; margin-top: 18px; }
 .recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 13px 0; }
+.review-required-action { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 14px; padding: 14px; border: 1px solid color-mix(in oklch, var(--warning), transparent 45%); border-radius: var(--radius); background: color-mix(in oklch, var(--warning), white 93%); }
+.review-required-action p { margin: 3px 0 0; color: var(--ink); max-width: 58ch; }
+.review-required-action .button { flex: 0 0 auto; }
 .safety-failure { margin-top: 14px; padding: 14px; border: 1px solid color-mix(in oklch, var(--danger), transparent 55%); border-radius: var(--radius); background: color-mix(in oklch, var(--danger), white 94%); }
 .safety-failure strong { color: var(--danger); }
 .safety-failure p { margin: 6px 0; color: var(--ink); }
 .safety-failure ul { margin: 10px 0 0; padding-left: 20px; }
 .safety-failure li { margin: 7px 0; }
 .safety-failure li small { display: block; color: var(--muted); }
-.progress-track i { display: block; height: 100%; width: 12%; background: var(--primary); transition: width var(--fast); }
+.progress-track i { display: block; height: 100%; width: 100%; background: var(--primary); transform: scaleX(.12); transform-origin: left; transition: transform var(--fast); }
 .event-column { border-left: 1px solid var(--border); padding-left: 24px; }
 .event-list { list-style: none; padding: 0; margin: 8px 0; color: var(--muted); }
 .event-list li { padding: 5px 0; border-bottom: 1px solid var(--surface-strong); }
@@ -110,7 +120,7 @@ input:disabled { background: var(--surface-strong); color: var(--muted); }
 .markdown-body h1, .markdown-body h2 { border-bottom: 1px solid var(--border); padding-bottom: .3em; }
 .markdown-body table { width: 100%; border-collapse: collapse; }
 .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 7px 9px; text-align: left; }
-.markdown-body blockquote { border-left: 3px solid var(--primary); color: var(--muted); margin-left: 0; padding-left: 14px; }
+.markdown-body blockquote { border: 1px solid color-mix(in oklch, var(--primary), transparent 60%); border-radius: var(--radius); background: var(--primary-soft); color: var(--muted); margin-left: 0; padding: 10px 14px; }
 .markdown-body pre { overflow-x: auto; background: var(--surface); padding: 14px; border-radius: var(--radius); }
 .markdown-source { width: 100%; resize: none; color: var(--ink); font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .review-inspector { border-left: 1px solid var(--border); padding: 16px; background: var(--surface); overflow-y: auto; }
@@ -132,5 +142,6 @@ input:disabled { background: var(--surface-strong); color: var(--muted); }
   .run-detail-grid { grid-template-columns: 1fr; } .event-column { border-left: 0; border-top: 1px solid var(--border); padding: 18px 0 0; }
   .review-layout { grid-template-columns: 1fr; } .review-inspector { border-left: 0; border-top: 1px solid var(--border); }
   .document-stage { min-height: 60vh; } .markdown-body, .markdown-source { padding: 28px 24px; }
+  .review-required-action { align-items: stretch; flex-direction: column; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
