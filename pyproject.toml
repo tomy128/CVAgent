@@ -1,7 +1,7 @@
 [project]
 name = "nonote-resume"
 version = "0.1.0"
-description = "Evidence-grounded resume tailoring agent built with LangChain and LangGraph"
+description = "Evidence-grounded resume generator and growth planner built with LangChain and LangGraph"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -23,7 +23,6 @@ dev = [
 ]
 
 [project.scripts]
-resume-agent = "resume_agent.cli:main"
 resume-agent-web = "resume_agent.web.app:main"
 
 [build-system]

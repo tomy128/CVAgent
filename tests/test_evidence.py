@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from resume_agent.evidence import load_evidence, read_text_file, search_evidence, split_text
-from resume_agent.models import EvidenceChunk, Requirement
+from resume_agent.domain import EvidenceChunk, Requirement
 
 
 def test_read_text_file_rejects_unsupported_input(tmp_path: Path) -> None:

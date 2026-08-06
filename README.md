@@ -1,86 +1,37 @@
-# NoNote Resume Agent
+# NoNote Resume Generator
 
-An evidence-grounded CLI that tailors a master resume to a job description without inventing experience. LangGraph owns workflow state, bounded retry, and human approval; LangChain provides document splitting, hybrid semantic retrieval, model integration, and structured output.
+A local, evidence-grounded Web tool that turns a job description, master resume, and optional career sources into the strongest honestly submittable resume available today—and a concrete route for closing the remaining gaps.
 
-## MVP workflow
+## Outputs
 
-```text
-JD extraction → lexical + semantic retrieval → resume draft → claim verification
-                    ↑                         retry once ↵
-                    └──────── unsupported claim ─────────┘
-                              ↓
-                    human approval → Markdown artifacts
-```
+- `application-resume.md` — verified, submittable resume.
+- `match-report.md` — strong, partial, transferable, and missing requirements.
+- `growth-plan.md` — bounded learning or portfolio tasks with acceptance evidence.
+- `target-resume.md` — visibly aspirational future version; never approvable.
+- `interview-prep.md` — evidence-backed answers and honest gap handling.
+- `run.json` — retrieval, context, routing, and execution audit.
 
-Generated runs contain:
-
-- `requirement-map.md`
-- `tailored-resume.md`
-- `evidence-report.md`
-- `interview-questions.md`
-- `run.json`
-
-## Setup
+## Run locally
 
 Requires Python 3.13 and `uv`.
 
 ```bash
 uv sync --group dev
+uv run resume-agent-web
 ```
 
-Run the included deterministic demo without an API key:
+Open `http://localhost:8765`, configure separate OpenAI-compatible LLM and Embedding services, upload a JD and master resume, and optionally add Markdown or text Sources. Demo mode runs the complete workflow without model credentials.
 
-```bash
-uv run resume-agent tailor \
-  --jd examples/jd.md \
-  --resume examples/resume.md \
-  --demo --yes
-```
+Model settings and API keys remain in this browser's `localStorage`. Uploaded inputs, SQLite checkpoints, events, and generated artifacts stay under local `output/<run-id>/` directories. Run metadata and events redact secrets.
 
-The master resume is always the primary evidence source. Add optional supporting material only when it contains relevant details omitted from the resume:
+## Architecture
 
-```bash
-uv run resume-agent tailor \
-  --jd examples/jd.md \
-  --resume examples/resume.md \
-  --sources examples/evidence \
-  --demo --yes
-```
+LangChain implements small typed tasks: requirement extraction, evidence matching, section generation, verification, growth planning, and interview preparation. LangGraph orchestrates those chains with explicit state, conditional routes, checkpointed batch loops, one repair pass, and human review. Ordinary Python enforces context budgets and prevents aspirational content from entering the application resume.
 
-For an OpenAI-compatible model:
-
-```bash
-export OPENAI_API_KEY="..."
-export RESUME_AGENT_MODEL="gpt-5-mini"
-# Optional: export OPENAI_BASE_URL="https://provider.example/v1"
-
-uv run resume-agent tailor \
-  --jd path/to/jd.md \
-  --resume path/to/master-resume.md \
-  --sources path/to/optional-career-materials
-```
-
-The CLI pauses before final output. Review the verified draft and approve it, edit it in the prompt flow, or reject it. Inputs remain read-only. SQLite checkpoints and generated files are stored under `output/<run-id>/` by default.
-
-## Architecture boundaries
-
-The CLI is the product entrypoint. LangGraph coordinates explicit workflow state, checkpointing, one evidence-retrieval retry, and human approval. LangChain builds a per-run in-memory vector index and combines semantic matches with exact lexical evidence. Backend adapters handle either deterministic offline behavior or structured model calls. Evidence loading and claim verification remain separate from generation so changed claims can be traced to an input source. The MVP accepts Markdown or plain text and writes only to the selected output directory; web UI, persistent indexes, document conversion, and external system integrations are outside its scope.
+Heavy stages execute sequentially for local models. Context size is discovered from a user override, LangChain model profile, loopback Ollama metadata, or a conservative 4096-token fallback. Matching, resume generation, and verification split at real Graph node boundaries so interrupted Runs resume from completed batches.
 
 ## Validate
 
 ```bash
 uv run pytest
-uv run resume-agent tailor --help
 ```
-
-## Local Web workbench
-
-Start the framework-free Web interface on the loopback address:
-
-```bash
-uv run resume-agent-web
-```
-
-Open `http://localhost:8765`. The page provides independent LLM and Embedding configuration, representative connection tests, reasoning and output controls, JD and resume upload, optional supporting sources, live LangGraph node events, and full-screen Markdown review. Reasoning defaults to `none` for bounded structured resume tasks. Model tokens are not streamed; five-second workflow heartbeats keep slow model calls observable and report node duration.
-
-All model settings, including API keys, stay in this browser's `localStorage` so refreshes and browser restarts preserve the local workbench configuration. Run metadata and events still redact secrets; the server can alternatively use `OPENAI_API_KEY` from its environment. Uploaded inputs and generated artifacts stay under the local `output/<run-id>/` directory.

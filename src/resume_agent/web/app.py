@@ -14,8 +14,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
-from resume_agent.backends import build_chat_model
+from resume_agent.chains.common import build_chat_model
 from resume_agent.web.embedding import build_openai_embeddings
+from resume_agent.web.context import ContextDiscovery, discover_context_window
 from resume_agent.web.schemas import ConnectionTestRequest, ReviewRequest, RunSettings
 from resume_agent.web.service import RunManager
 
@@ -26,6 +27,34 @@ MAX_TOTAL_SIZE = 20 * 1024 * 1024
 
 class ConnectionProbe(BaseModel):
     ok: bool
+
+
+def resolve_run_context(settings: RunSettings) -> RunSettings:
+    if settings.demo:
+        resolved = settings.llm.model_copy(update={
+            "resolved_context_window": settings.llm.context_window or 4096,
+            "context_source": "manual" if settings.llm.context_window else "demo_default",
+        })
+        return settings.model_copy(update={"llm": resolved})
+    llm = settings.llm
+    if llm.context_window:
+        discovery = ContextDiscovery(llm.context_window, "manual")
+    else:
+        model = build_chat_model(
+            llm.model,
+            llm.secret(os.getenv("OPENAI_API_KEY")),
+            llm.base_url,
+            llm.timeout_seconds,
+            llm.max_retries,
+            llm.reasoning_effort,
+            llm.max_output_tokens,
+        )
+        discovery = discover_context_window(model, llm.model, llm.base_url)
+    resolved = llm.model_copy(update={
+        "resolved_context_window": discovery.tokens,
+        "context_source": discovery.source,
+    })
+    return settings.model_copy(update={"llm": resolved})
 
 
 def create_app(output_root: Path | None = None, testing: bool = False) -> FastAPI:
@@ -80,7 +109,7 @@ def create_app(output_root: Path | None = None, testing: bool = False) -> FastAP
     ):
         started = time.monotonic()
 
-        def execute() -> None:
+        def execute() -> ContextDiscovery | None:
             settings = payload.settings
             key = settings.secret(os.getenv("OPENAI_API_KEY"))
             if payload.service == "llm":
@@ -91,16 +120,19 @@ def create_app(output_root: Path | None = None, testing: bool = False) -> FastAP
                     settings.timeout_seconds,
                     settings.max_retries,
                     settings.reasoning_effort,
-                    settings.max_output_tokens,
+                    min(settings.max_output_tokens, 512),
                 )
                 model.with_structured_output(ConnectionProbe).invoke(
                     "Return a structured response with ok set to true."
                 )
-                return
+                if settings.context_window:
+                    return ContextDiscovery(settings.context_window, "manual")
+                return discover_context_window(model, settings.model, settings.base_url)
             build_openai_embeddings(settings, key).embed_query("connection test")
+            return None
 
         try:
-            await asyncio.to_thread(execute)
+            discovery = await asyncio.to_thread(execute)
         except Exception as error:
             message = str(error)
             lowered = message.lower()
@@ -125,6 +157,8 @@ def create_app(output_root: Path | None = None, testing: bool = False) -> FastAP
             "ok": True,
             "category": "success",
             "duration_ms": round((time.monotonic() - started) * 1000),
+            "context_window": discovery.tokens if discovery else None,
+            "context_source": discovery.source if discovery else None,
         }
 
     @app.post("/api/runs", status_code=201)
@@ -139,6 +173,10 @@ def create_app(output_root: Path | None = None, testing: bool = False) -> FastAP
             settings = RunSettings.model_validate_json(config)
         except ValidationError as error:
             raise HTTPException(status_code=422, detail=error.errors(include_url=False)) from error
+        try:
+            settings = await asyncio.to_thread(resolve_run_context, settings)
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         uploads = [jd, resume, *sources]
         contents = [await item.read(MAX_FILE_SIZE + 1) for item in uploads]
         if any(len(content) > MAX_FILE_SIZE for content in contents):
@@ -225,6 +263,7 @@ def create_app(output_root: Path | None = None, testing: bool = False) -> FastAP
         _: str = Depends(require_session),
     ):
         try:
+            settings = await asyncio.to_thread(resolve_run_context, settings)
             return app.state.manager.public(app.state.manager.resume(run_id, settings))
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

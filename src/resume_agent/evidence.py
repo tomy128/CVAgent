@@ -6,7 +6,7 @@ from pathlib import Path
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from resume_agent.models import EvidenceChunk, Requirement
+from resume_agent.domain import EvidenceChunk, Requirement
 
 SUPPORTED_SUFFIXES = {".md", ".txt"}
 TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_+.#/-]*|[\u4e00-\u9fff]{2,}")

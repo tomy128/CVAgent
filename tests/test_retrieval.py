@@ -1,4 +1,4 @@
-from resume_agent.models import EvidenceChunk, Requirement
+from resume_agent.domain import EvidenceChunk, Requirement
 from resume_agent.retrieval import DeterministicHashEmbeddings, HybridRetriever
 
 

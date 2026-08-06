@@ -13,6 +13,9 @@ class ModelSettings(BaseModel):
     max_retries: int = Field(default=1, ge=0, le=5)
     reasoning_effort: Literal["none", "low", "medium", "high"] | None = "none"
     max_output_tokens: int = Field(default=4096, ge=1, le=32768)
+    context_window: int | None = Field(default=None, ge=2048, le=1048576)
+    resolved_context_window: int | None = Field(default=None, ge=2048, le=1048576)
+    context_source: str = "automatic"
     use_server_key: bool = False
 
     @field_validator("model")
@@ -39,9 +42,16 @@ class ModelSettings(BaseModel):
             "max_retries": self.max_retries,
             "reasoning_effort": self.reasoning_effort,
             "max_output_tokens": self.max_output_tokens,
+            "context_window": self.context_window,
+            "resolved_context_window": self.resolved_context_window,
+            "context_source": self.context_source,
             "has_api_key": bool(self.api_key),
             "use_server_key": self.use_server_key,
         }
+
+    @property
+    def effective_context_window(self) -> int:
+        return self.context_window or self.resolved_context_window or 4096
 
 
 class EmbeddingSettings(ModelSettings):

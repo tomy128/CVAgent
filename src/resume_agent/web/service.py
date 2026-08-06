@@ -16,14 +16,18 @@ from typing import Any
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
-from resume_agent.backends import HeuristicBackend, LangChainBackend
+from resume_agent.chains import build_chain_bundle
+from resume_agent.chains.common import build_chat_model
+from resume_agent.context_budget import ContextBudget, is_context_overflow
+from resume_agent.domain import GeneratedSection, Requirement, ResumeClaim
 from resume_agent.evidence import load_evidence, read_text_file
+from resume_agent.graph import SafetyGateError, build_graph
 from resume_agent.output import write_artifacts, write_failure_artifacts
 from resume_agent.retrieval import DeterministicHashEmbeddings, HybridRetriever
+from resume_agent.sections import split_markdown_sections
 from resume_agent.web.embedding import build_openai_embeddings
 from resume_agent.web.events import EventStore
 from resume_agent.web.schemas import RunPublic, RunSettings
-from resume_agent.workflow import SafetyGateError, build_graph
 
 ACTIVE_STATUSES = {"preparing", "running", "waiting_review", "cancelling"}
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
@@ -46,9 +50,7 @@ def classify_error(error: Exception, record: "RunRecord") -> dict[str, object]:
             "service": "workflow",
             "issues": error.issues,
         }
-    if type(error).__name__ == "LengthFinishReasonError" or any(
-        token in lowered for token in ("length limit", "context length", "maximum context")
-    ):
+    if is_context_overflow(error):
         category = "context_length"
     elif "timeout" in lowered or "timed out" in lowered:
         category = "timeout"
@@ -199,7 +201,7 @@ class RunManager:
                     for key, value in event.items()
                     if key in {
                         "error_type", "category", "elapsed_seconds", "duration_seconds",
-                        "phase",
+                        "phase", "batch_index", "batch_total", "section",
                     }
                 },
             )
@@ -219,7 +221,9 @@ class RunManager:
             ),
             "node_progress": {
                 "embedding_retrieval": "Retrieving semantic evidence",
-                "llm_evidence_mapping": "Mapping evidence with LLM",
+                "matching": "Matching requirements to evidence",
+                "generation": "Generating an application-resume section",
+                "verification": "Verifying an application-resume section",
             }.get(str(event.get("phase")), node),
             "review_required": "Waiting for resume review",
         }
@@ -317,22 +321,30 @@ class RunManager:
         return path
 
     def _components(self, settings: RunSettings):
+        budget = ContextBudget(
+            settings.llm.effective_context_window,
+            settings.llm.max_output_tokens,
+        )
         if settings.demo:
-            return HeuristicBackend(), HybridRetriever(DeterministicHashEmbeddings(size=64))
+            return (
+                build_chain_bundle(None),
+                HybridRetriever(DeterministicHashEmbeddings(size=64)),
+                budget,
+            )
         server_key = os.getenv("OPENAI_API_KEY")
         llm_key = settings.llm.secret(server_key)
         embedding_key = settings.embedding.secret(server_key)
-        backend = LangChainBackend(
-            model=settings.llm.model,
-            api_key=llm_key,
-            base_url=settings.llm.base_url,
-            timeout=settings.llm.timeout_seconds,
-            max_retries=settings.llm.max_retries,
-            reasoning_effort=settings.llm.reasoning_effort,
-            max_output_tokens=settings.llm.max_output_tokens,
+        model = build_chat_model(
+            settings.llm.model,
+            llm_key,
+            settings.llm.base_url,
+            settings.llm.timeout_seconds,
+            settings.llm.max_retries,
+            settings.llm.reasoning_effort,
+            budget.output_tokens,
         )
         embeddings = build_openai_embeddings(settings.embedding, embedding_key)
-        return backend, HybridRetriever(embeddings)
+        return build_chain_bundle(model), HybridRetriever(embeddings), budget
 
     def _execute(
         self,
@@ -350,9 +362,9 @@ class RunManager:
             graph = None
             config = {"configurable": {"thread_id": record.id}}
             try:
-                backend, retriever = self._components(record.settings)
+                chains, retriever, budget = self._components(record.settings)
                 graph = build_graph(
-                    backend, SqliteSaver(connection), retriever,
+                    chains, SqliteSaver(connection), retriever, budget,
                     event_sink=lambda event: self._emit(record, event),
                 )
                 state = graph.invoke(
@@ -406,12 +418,12 @@ class RunManager:
         with record.lock:
             connection = sqlite3.connect(record.directory / "checkpoints.sqlite", check_same_thread=False)
             try:
-                backend, retriever = self._components(record.settings)
+                chains, retriever, budget = self._components(record.settings)
                 graph = build_graph(
-                    backend, SqliteSaver(connection), retriever,
+                    chains, SqliteSaver(connection), retriever, budget,
                     event_sink=lambda event: self._emit(record, event),
                 )
-                current = (record.directory / "tailored-resume.md").read_text(encoding="utf-8")
+                current = (record.directory / "application-resume.md").read_text(encoding="utf-8")
                 edited = resume_markdown if resume_markdown is not None else current
                 if approved and edited != current:
                     record.event_store.append(
@@ -425,24 +437,16 @@ class RunManager:
                     chunks = load_evidence(
                         resume_files[0], sources_dir if sources_dir.is_dir() else None
                     )
-                    verification = backend.verify_edited_resume(current, edited, chunks)
-                    valid_ids = {item.id for item in chunks}
-                    invalid = [
-                        claim.text
-                        for claim in verification.supported_claims
-                        if not claim.evidence_ids or any(item not in valid_ids for item in claim.evidence_ids)
-                    ]
-                    if verification.unsupported_claims or invalid:
+                    unsupported = self._verify_edited_resume(
+                        current, edited, chunks, chains
+                    )
+                    if unsupported:
                         record.event_store.append(
                             "node_failed", "failed", "Edited resume contains unsupported claims",
                             "verify_edited_resume",
-                            {"unsupported_count": len(verification.unsupported_claims) + len(invalid)},
+                            {"unsupported_count": len(unsupported)},
                         )
                         raise ValueError("Edited resume contains unsupported factual claims")
-                    if verification.corrected_resume_markdown != edited:
-                        raise ValueError(
-                            "Edited resume verification changed the draft; review it again"
-                        )
                     record.event_store.append(
                         "node_completed", "complete", "Edited resume verified", "verify_edited_resume"
                     )
@@ -461,6 +465,40 @@ class RunManager:
                 record.updated_at = utc_now()
                 self._persist(record)
         return record
+
+    @staticmethod
+    def _verify_edited_resume(current: str, edited: str, chunks, chains) -> list[str]:
+        from resume_agent.evidence import search_evidence
+
+        unsupported: list[str] = []
+        for section in split_markdown_sections(edited):
+            if section.source_markdown in current:
+                continue
+            requirement = Requirement(
+                id=section.id,
+                category="edited section",
+                description=section.source_markdown,
+            )
+            evidence = search_evidence(requirement, chunks, limit=4)
+            if not evidence:
+                unsupported.append(section.source_markdown)
+                continue
+            generated = GeneratedSection(
+                section_id=section.id,
+                markdown=section.source_markdown,
+                claims=[
+                    ResumeClaim(
+                        text=section.source_markdown,
+                        status="reframed",
+                        evidence_ids=[item.id for item in evidence],
+                    )
+                ],
+            )
+            result = chains.verification.invoke(generated, evidence)
+            unsupported.extend(item.claim for item in result.unsupported_claims)
+            if result.corrected_markdown != section.source_markdown:
+                unsupported.append(section.source_markdown)
+        return unsupported
 
     def cancel(self, run_id: str) -> RunRecord:
         record = self.get_record(run_id)
@@ -532,9 +570,9 @@ class RunManager:
             graph = None
             config = {"configurable": {"thread_id": record.id}}
             try:
-                backend, retriever = self._components(record.settings)
+                chains, retriever, budget = self._components(record.settings)
                 graph = build_graph(
-                    backend, SqliteSaver(connection), retriever,
+                    chains, SqliteSaver(connection), retriever, budget,
                     event_sink=lambda event: self._emit(record, event),
                 )
                 state = graph.invoke(
@@ -587,8 +625,9 @@ class RunManager:
         self._refresh(record)
         results = {}
         for name in (
-            "tailored-resume.md", "requirement-map.md", "evidence-report.md",
-            "interview-questions.md", "run.json", "failure-report.md", "unsafe-draft.md",
+            "application-resume.md", "match-report.md", "growth-plan.md",
+            "target-resume.md", "interview-prep.md", "run.json",
+            "failure-report.md", "unsafe-draft.md",
         ):
             path = record.directory / name
             if path.is_file():

@@ -2,25 +2,34 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 const resultLabels = {
-  "tailored-resume.md": "定制简历",
-  "requirement-map.md": "要求映射",
-  "evidence-report.md": "证据报告",
-  "interview-questions.md": "面试问题",
+  "application-resume.md": "可投递简历",
+  "match-report.md": "匹配报告",
+  "growth-plan.md": "提升路线",
+  "target-resume.md": "目标简历（不可投递）",
+  "interview-prep.md": "面试准备",
   "failure-report.md": "失败报告",
   "unsafe-draft.md": "未通过安全检查的草稿",
   "run.json": "运行详情",
 };
 const graphNodes = [
-  ["extract_requirements", "解析 JD", 20, 42], ["build_evidence_index", "构建索引", 160, 42],
-  ["retrieve_evidence", "检索证据", 300, 42], ["draft_resume", "生成简历", 440, 42],
-  ["verify_claims", "事实核验", 580, 42], ["safety_gate", "安全检查", 720, 42],
-  ["human_review", "人工审核", 860, 42],
+  ["extract_requirements", "解析 JD", 5, 42], ["build_evidence_index", "证据索引", 103, 42],
+  ["match_requirements", "要求匹配", 201, 42], ["generate_application_resume", "生成简历", 299, 42],
+  ["verify_application_resume", "事实核验", 397, 42], ["analyze_gaps", "分析差距", 495, 42],
+  ["generate_growth_plan", "提升路线", 593, 42], ["generate_target_resume", "目标简历", 691, 42],
+  ["generate_interview_prep", "面试准备", 789, 42], ["human_review", "人工审核", 887, 42],
 ];
+const nodeStages = {
+  prepare_matching: "match_requirements", match_batch: "match_requirements",
+  prepare_resume: "generate_application_resume", generate_section: "generate_application_resume",
+  prepare_verification: "verify_application_resume", verify_section: "verify_application_resume",
+  finalize_verification: "verify_application_resume",
+};
+function stageForNode(node) { return nodeStages[node] || node; }
 const state = {
   csrf: "", run: null, events: [], eventSource: null, startedAt: null,
   lastEventId: 0, actionPending: false,
   nodeStates: Object.fromEntries(graphNodes.map(([id]) => [id, "pending"])),
-  activeResult: "tailored-resume.md", reviewSource: "", refreshTimer: null,
+  activeResult: "application-resume.md", reviewSource: "", refreshTimer: null,
 };
 
 function toast(message) {
@@ -42,6 +51,7 @@ function serviceSettings(service) {
   if (service === "llm") {
     settings.reasoning_effort = value("#llm-reasoning") || null;
     settings.max_output_tokens = numberValue("#llm-max-output");
+    settings.context_window = numberValue("#llm-context-window") || null;
   }
   return settings;
 }
@@ -70,6 +80,7 @@ function restoreConfig() {
     if (saved.embedding?.dimensions) $("#embedding-dimensions").value = saved.embedding.dimensions;
     if (saved.llm && "reasoning_effort" in saved.llm) $("#llm-reasoning").value = saved.llm.reasoning_effort || "";
     if (saved.llm?.max_output_tokens) $("#llm-max-output").value = saved.llm.max_output_tokens;
+    if (saved.llm?.context_window) $("#llm-context-window").value = saved.llm.context_window;
     $("#demo-mode").checked = Boolean(saved.demo);
   } catch { localStorage.removeItem("resume-workbench-config"); }
 }
@@ -98,7 +109,12 @@ async function testService(service) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ service, settings: serviceSettings(service) }),
     });
-    indicator.classList.add("success"); indicator.textContent = `可用 · ${result.duration_ms}ms`; persistConfig();
+    indicator.classList.add("success"); indicator.textContent = `可用 · ${result.duration_ms}ms`;
+    if (service === "llm" && result.context_window) {
+      const labels = { manual: "手动设置", langchain_profile: "LangChain Profile", ollama_config: "Ollama 配置", ollama_model_capped: "Ollama 模型信息（保守限制）", conservative_default: "保守默认" };
+      $("#llm-context-detection").textContent = `本次将使用 ${result.context_window} tokens · ${labels[result.context_source] || result.context_source}`;
+    }
+    persistConfig();
   } catch (error) {
     indicator.classList.add("error"); indicator.textContent = `失败 · ${Math.round(performance.now() - started)}ms`; toast(error.message);
   }
@@ -122,8 +138,12 @@ function statusTitle(status) {
 }
 function renderRun() {
   if (!state.run) return;
+  const contextConfig = state.run.config?.llm;
+  if (contextConfig?.resolved_context_window) {
+    $("#llm-context-detection").textContent = `当前 Run 使用 ${contextConfig.resolved_context_window} tokens · ${contextConfig.context_source}`;
+  }
   $("#run-id").textContent = `RUN ${state.run.id}`; $("#run-title").textContent = statusTitle(state.run.status);
-  $("#current-node").textContent = graphNodes.find(([id]) => id === state.run.current_node)?.[1] || statusTitle(state.run.status);
+  $("#current-node").textContent = graphNodes.find(([id]) => id === stageForNode(state.run.current_node))?.[1] || statusTitle(state.run.status);
   if (state.run.error) {
     const error = state.run.error;
     const category = {
@@ -144,7 +164,7 @@ function renderRun() {
     ]
       .filter(Boolean).join(" · ");
     const guidance = error.category === "context_length"
-      ? " · 请增大模型上下文窗口，或减少输入材料后新建运行"
+      ? " · 应用已自动拆批；最小不可拆分内容仍超出窗口，可手动提高 Context window 后重试"
       : "";
     $("#current-summary").textContent = `${category}${context ? ` · ${context}` : ""}${guidance}`;
   } else if (state.events.length) {
@@ -171,13 +191,13 @@ function renderGraph() {
   const ns = "http://www.w3.org/2000/svg";
   graphNodes.slice(0, -1).forEach(([, , x, y], index) => {
     const next = graphNodes[index + 1]; const line = document.createElementNS(ns, "path");
-    line.setAttribute("class", "edge"); line.setAttribute("d", `M ${x + 104} ${y + 26} L ${next[2]} ${next[3] + 26}`); svg.append(line);
+    line.setAttribute("class", "edge"); line.setAttribute("d", `M ${x + 84} ${y + 26} L ${next[2]} ${next[3] + 26}`); svg.append(line);
   });
-  const retry = document.createElementNS(ns, "path"); retry.setAttribute("class", "edge retry"); retry.setAttribute("d", "M 632 102 C 590 140 350 140 350 96"); svg.append(retry);
+  const retry = document.createElementNS(ns, "path"); retry.setAttribute("class", "edge retry"); retry.setAttribute("d", "M 439 96 C 430 130 350 130 341 96"); svg.append(retry);
   graphNodes.forEach(([id, label, x, y]) => {
     const group = document.createElementNS(ns, "g"); group.setAttribute("class", `node ${state.nodeStates[id] || "pending"}`);
-    const rect = document.createElementNS(ns, "rect"); rect.setAttribute("x", x); rect.setAttribute("y", y); rect.setAttribute("width", 104); rect.setAttribute("height", 52);
-    const text = document.createElementNS(ns, "text"); text.setAttribute("x", x + 52); text.setAttribute("y", y + 31); text.textContent = label;
+    const rect = document.createElementNS(ns, "rect"); rect.setAttribute("x", x); rect.setAttribute("y", y); rect.setAttribute("width", 84); rect.setAttribute("height", 52);
+    const text = document.createElementNS(ns, "text"); text.setAttribute("x", x + 42); text.setAttribute("y", y + 31); text.textContent = label;
     group.append(rect, text); svg.append(group);
   });
   const completeCount = Object.values(state.nodeStates).filter((status) => ["complete", "waiting"].includes(status)).length;
@@ -197,7 +217,7 @@ function onEvent(message) {
   state.lastEventId = event.id; state.events.push(event); state.events = state.events.slice(-30);
   if (event.node) {
     const mapped = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
-    state.nodeStates[event.node] = mapped; state.run.current_node = event.node;
+    state.nodeStates[stageForNode(event.node)] = mapped; state.run.current_node = event.node;
   }
   $("#current-summary").textContent = eventSummary(event); renderEvents(); renderRun();
   if (["review_required", "run_completed", "run_failed", "run_cancelled"].includes(event.type)) {
@@ -211,11 +231,13 @@ function eventSummary(event) {
   if (event.type === "node_progress") {
     return event.details?.phase === "embedding_retrieval"
       ? "正在执行 Embedding 语义检索"
-      : "正在使用 LLM 映射证据";
+      : event.details?.batch_total
+        ? `${event.details.phase === "generation" ? "正在分节生成简历" : event.details.phase === "verification" ? "正在分节核验简历" : "正在映射要求与证据"} · 第 ${event.details.batch_index}/${event.details.batch_total} 批`
+        : "正在处理上下文批次";
   }
   if (event.type !== "node_heartbeat") return event.summary;
   const elapsed = Number(event.details?.elapsed_seconds || 0);
-  const node = graphNodes.find(([id]) => id === event.node)?.[1] || event.node;
+  const node = graphNodes.find(([id]) => id === stageForNode(event.node))?.[1] || event.node;
   return elapsed >= 30
     ? `${node}仍在调用模型 · 已等待 ${elapsed}s，程序仍在运行`
     : `${node}正在调用模型 · 已等待 ${elapsed}s`;
@@ -226,7 +248,7 @@ async function loadRun(runId) {
   state.lastEventId = Math.max(0, ...state.events.map((event) => Number(event.id) || 0));
   state.nodeStates = Object.fromEntries(graphNodes.map(([id]) => [id, "pending"]));
   for (const event of state.events) if (event.node) {
-    state.nodeStates[event.node] = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
+    state.nodeStates[stageForNode(event.node)] = event.status === "complete" ? "complete" : event.status === "failed" ? "failed" : event.status === "waiting" ? "waiting" : "running";
   }
   state.startedAt = Date.parse(state.run.created_at); showRun(); renderEvents();
   if (
@@ -252,7 +274,7 @@ function renderResults() {
     const button = document.createElement("button"); button.type = "button"; button.className = "result-link"; button.textContent = label; button.onclick = () => openReview(name); $("#result-links").append(button);
   }
   $("#result-status").textContent = Object.keys(results).length ? `${Object.keys(results).length} 项可查看` : "运行完成后可查看";
-  if (state.run?.status === "waiting_review" && results["tailored-resume.md"]) $("#result-status").textContent = "等待你的审核";
+  if (state.run?.status === "waiting_review" && results["application-resume.md"]) $("#result-status").textContent = "等待你的审核";
 }
 function openReview(name) {
   const source = state.run.results[name] || "";
@@ -260,17 +282,21 @@ function openReview(name) {
   $("#review-view").classList.remove("hidden"); $("#review-run-id").textContent = `运行 ${state.run.id}`; $("#review-status").textContent = statusTitle(state.run.status);
   $("#markdown-source").value = source;
   renderTabs(); setReviewMode("render");
-  const actionable = state.run.status === "waiting_review" && name === "tailored-resume.md";
+  const actionable = state.run.status === "waiting_review" && name === "application-resume.md";
   const safetyFailed = state.run.error?.category === "safety_gate";
+  const aspirational = name === "target-resume.md";
   $("#review-actions").classList.toggle("hidden", !actionable);
   $("#markdown-source").readOnly = !actionable;
   const message = $("#review-state-message");
-  message.className = safetyFailed ? "danger" : "verified";
+  message.className = safetyFailed || aspirational ? "danger" : "verified";
   message.textContent = safetyFailed
     ? "✕ 事实安全未通过"
+    : aspirational ? "⚠ 目标版本不可直接投递"
     : actionable ? "等待你的审核" : "✓ 此文件可供查看";
   $("#review-help").textContent = safetyFailed
     ? "这是诊断产物，不能批准。请根据失败报告补充证据，或删除、弱化不受支持的内容后新建运行。"
+    : aspirational
+      ? "其中的 TARGET 内容尚无事实证据，只能用于理解能力目标和执行提升路线。"
     : actionable
       ? "源码模式可以编辑 Markdown。编辑后的内容在提交前需要重新核验。"
       : "此产物为只读内容，可在渲染和源码模式之间切换。";

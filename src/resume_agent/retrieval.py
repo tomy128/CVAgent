@@ -9,7 +9,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import InMemoryVectorStore
 
 from resume_agent.evidence import search_evidence, tokenize
-from resume_agent.models import EvidenceChunk, Requirement, RequirementRetrieval, RetrievalHit
+from resume_agent.domain import EvidenceChunk, Requirement, RequirementRetrieval, RetrievalHit
 
 
 class DeterministicHashEmbeddings(Embeddings):

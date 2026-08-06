@@ -4,13 +4,13 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from resume_agent.backends import build_chat_model
+from resume_agent.chains.common import build_chat_model
 from resume_agent.web.app import create_app
 from resume_agent.web.events import EventStore
 from resume_agent.web.embedding import build_openai_embeddings
 from resume_agent.web.schemas import EmbeddingSettings, ModelSettings, RunSettings
 from resume_agent.web.service import RunManager, RunRecord, classify_error
-from resume_agent.workflow import SafetyGateError
+from resume_agent.graph import SafetyGateError
 
 
 def demo_settings() -> RunSettings:
@@ -81,6 +81,7 @@ def test_settings_redact_secrets() -> None:
     assert "llm-secret" not in serialized
     assert "embed-secret" not in serialized
     assert settings.redacted()["llm"]["has_api_key"] is True
+    assert settings.redacted()["llm"]["context_window"] is None
 
 
 def test_demo_run_reaches_review_and_can_be_approved(tmp_path: Path) -> None:
@@ -88,14 +89,19 @@ def test_demo_run_reaches_review_and_can_be_approved(tmp_path: Path) -> None:
     created = create_demo_run(client, headers)
     run = wait_for_status(client, created["id"], "waiting_review")
 
-    assert "tailored-resume.md" in run["results"]
+    assert "application-resume.md" in run["results"]
     assert "semantic" in run["results"]["run.json"]
+    assert any(
+        event["type"] == "node_progress"
+        and event["details"].get("batch_total") == 1
+        for event in run["events"]
+    )
     approval = client.post(
         f"/api/runs/{created['id']}/review",
         headers=headers,
         json={
             "action": "approve",
-            "resume_markdown": run["results"]["tailored-resume.md"],
+            "resume_markdown": run["results"]["application-resume.md"],
         },
     )
 
@@ -308,6 +314,8 @@ def test_result_viewer_initializes_content_before_rendering() -> None:
     assert '$("#review-actions").classList.toggle("hidden", !actionable)' in source
     assert '$("#markdown-source").readOnly = !actionable' in source
     assert "✕ 事实安全未通过" in source
+    assert 'name === "target-resume.md"' in source
+    assert "⚠ 目标版本不可直接投递" in source
 
 
 def test_persisted_base_urls_use_explicit_dom_mapping() -> None:
@@ -350,10 +358,10 @@ def test_production_worker_can_be_terminated(tmp_path: Path) -> None:
     assert len([event for event in events if event.type == "run_cancelled"]) == 1
 
 
-def test_evidence_mapping_does_not_duplicate_chunks_per_requirement() -> None:
-    source = (Path(__file__).parents[1] / "src/resume_agent/backends.py").read_text(
+def test_context_window_uses_explicit_dom_mapping() -> None:
+    source = (Path(__file__).parents[1] / "src/resume_agent/web/static/app.js").read_text(
         encoding="utf-8"
     )
 
-    assert "candidates = [chunk.model_dump() for chunk in chunks]" in source
-    assert "candidates = {" not in source
+    assert 'settings.context_window = numberValue("#llm-context-window") || null' in source
+    assert '$("#llm-context-window").value = saved.llm.context_window' in source
