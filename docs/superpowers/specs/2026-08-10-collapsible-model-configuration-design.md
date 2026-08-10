@@ -11,7 +11,7 @@ Use a small explicit disclosure control rather than native `details`. A button g
 ## MVP scope
 
 - Change the visible header brand to `CV Agent` and the document title to `CV Agent Workbench`.
-- Make the complete LLM and Embedding heading rows independently clickable disclosure buttons.
+- Give each LLM and Embedding heading a native disclosure button while preserving a valid `h2` heading for heading navigation; the adjacent connection state remains visible and outside the button.
 - Keep both sections expanded on every page load; do not persist disclosure state.
 - When collapsed, keep the service title, disclosure indicator, and connection state visible while hiding fields and the connection-test action.
 - Support pointer, Enter, and Space activation through native button behavior.
@@ -20,14 +20,16 @@ Use a small explicit disclosure control rather than native `details`. A button g
 
 ## Technical path
 
-Wrap each service's existing fields and test button in a named content container. Replace its static heading wrapper with a full-width button containing the existing heading and connection state plus a directional disclosure icon. A shared JavaScript initializer toggles `hidden`, `aria-expanded`, and a collapsed class for either section without duplicating service-specific logic.
+Wrap each service's existing fields and test button in a named content container. Keep a valid `h2` heading and place a native disclosure button inside it, with the title and directional icon in the button; keep the connection state beside the heading rather than nested in the button. A shared JavaScript initializer toggles `hidden`, `aria-expanded`, and a collapsed class for either section without duplicating service-specific logic.
+
+On every script initialization, the initializer explicitly sets both content panels to visible and both triggers to `aria-expanded="true"`. It does not read or write disclosure state in `localStorage`, so a fresh page load always resets both sections to expanded.
 
 CSS will preserve the current sidebar visual language, provide hover and focus states, and rotate the disclosure icon during the existing fast state transition. Reduced-motion preferences disable the rotation transition. Hiding content uses the native `hidden` attribute so collapsed controls leave the accessibility tree and tab order.
 
 ## Verification
 
 - Add a static Web regression that checks the new titles and disclosure semantics for both services.
-- Add JavaScript regression coverage for default expanded state and independent toggling if the existing test harness supports DOM execution; otherwise keep the toggle initializer small and validate it through source assertions plus a browser smoke check.
+- Add automated JavaScript behavior coverage for default expansion, independent LLM and Embedding toggling, synchronized `hidden` and `aria-expanded` values, and reset to expanded on fresh initialization. Extend the smallest existing Web test harness that can exercise the static script; do not substitute source assertions for the core interaction.
 - Run the repository test suite.
 
 ## Risks and evolution
