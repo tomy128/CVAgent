@@ -1,4 +1,6 @@
 import json
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -159,6 +161,27 @@ def test_markdown_preview_disables_html_and_sanitizes(tmp_path: Path) -> None:
 
     assert "html: false" in source
     assert "DOMPurify.sanitize" in source
+
+
+def test_model_configuration_disclosure_and_cv_agent_brand() -> None:
+    root = Path(__file__).parents[1]
+    html = (root / "src/resume_agent/web/static/index.html").read_text(encoding="utf-8")
+
+    assert "<title>CV Agent Workbench</title>" in html
+    assert "<span>CV Agent</span>" in html
+    assert html.count('class="config-disclosure"') == 2
+    assert 'aria-controls="llm-config-content"' in html
+    assert 'aria-controls="embedding-config-content"' in html
+    assert 'aria-expanded="true"' in html
+
+    node = shutil.which("node")
+    if node is None:
+        raise AssertionError("Node is required to run the frontend behavior regression")
+    subprocess.run(
+        [node, "--test", str(root / "tests/test_config_disclosure.mjs")],
+        check=True,
+        cwd=root,
+    )
 
 
 def test_timeout_error_is_actionable_and_redacted(tmp_path: Path) -> None:
