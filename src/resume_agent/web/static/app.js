@@ -1,5 +1,3 @@
-import { initializeConfigDisclosures } from "./config-disclosure.mjs";
-
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -369,7 +367,6 @@ async function resumeRun() {
 }
 function escapeHtml(text) { return String(text).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]); }
 
-initializeConfigDisclosures(document);
 restoreConfig();
 bootstrap().catch((error) => toast(error.message));
 $$('#setup-content input:not([type="file"]), #setup-content select').forEach((element) => {

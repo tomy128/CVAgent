@@ -26,11 +26,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .config-section h2, .results-section h2 { font-size: 15px; margin: 1px 0 0; }
 .eyebrow { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .1em; }
 .section-heading { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 13px; }
-.config-heading h2 { margin: 0; }
-.config-disclosure { display: flex; align-items: center; gap: 6px; margin: 0 -4px; padding: 1px 4px; border: 0; background: transparent; color: var(--ink); font-weight: 700; cursor: pointer; }
-.config-disclosure:hover { color: var(--primary); }
+.config-heading { cursor: pointer; list-style: none; }
+.config-heading::-webkit-details-marker { display: none; }
+.config-heading h2 { margin: 1px 0 0; }
+.config-heading:hover h2 { color: var(--primary); }
+.config-heading:focus-visible { outline: 3px solid color-mix(in oklch, var(--focus), transparent 35%); outline-offset: 3px; border-radius: var(--radius); }
+.config-heading-meta { display: flex; align-items: center; gap: 7px; }
 .disclosure-icon { display: inline-block; color: var(--muted); font-size: 16px; line-height: 1; transform: rotate(0deg); transition: transform var(--fast); }
-.config-disclosure[aria-expanded="false"] .disclosure-icon { transform: rotate(-90deg); }
+.config-section:not([open]) .disclosure-icon { transform: rotate(-90deg); }
 .connection-state { color: var(--muted); font-size: 12px; padding-top: 9px; }
 .connection-state.success { color: var(--success); } .connection-state.error { color: var(--danger); }
 label { display: block; color: var(--muted); font-size: 12px; margin-top: 10px; }

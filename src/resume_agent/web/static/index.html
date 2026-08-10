@@ -17,9 +17,9 @@
     <aside class="setup-panel" aria-label="运行配置">
       <button class="mobile-panel-toggle" id="panel-toggle" type="button" aria-expanded="true">配置与材料</button>
       <div id="setup-content">
-        <section class="config-section">
-          <div class="section-heading config-heading"><div><span class="eyebrow">MODEL SERVICE</span><h2><button class="config-disclosure" type="button" aria-expanded="true" aria-controls="llm-config-content"><span>LLM</span><span class="disclosure-icon" aria-hidden="true">⌄</span></button></h2></div><span class="connection-state" id="llm-state">未测试</span></div>
-          <div id="llm-config-content" data-config-content>
+        <details class="config-section" open>
+          <summary class="section-heading config-heading"><div><span class="eyebrow">MODEL SERVICE</span><h2>LLM</h2></div><span class="config-heading-meta"><span class="connection-state" id="llm-state">未测试</span><span class="disclosure-icon" aria-hidden="true">⌄</span></span></summary>
+          <div class="config-content">
             <label>Base URL<input id="llm-base-url" type="url" placeholder="https://api.openai.com/v1"></label>
             <label>API Key<input id="llm-api-key" type="password" autocomplete="off" placeholder="仅保留在当前页面"></label>
             <label>Model<input id="llm-model" value="gpt-5-mini"></label>
@@ -29,11 +29,11 @@
             <label class="check-row"><input id="llm-server-key" type="checkbox"> 使用服务端 API Key</label>
             <button class="button secondary full" type="button" data-test-service="llm">测试 LLM 连接</button>
           </div>
-        </section>
+        </details>
 
-        <section class="config-section">
-          <div class="section-heading config-heading"><div><span class="eyebrow">MODEL SERVICE</span><h2><button class="config-disclosure" type="button" aria-expanded="true" aria-controls="embedding-config-content"><span>Embedding</span><span class="disclosure-icon" aria-hidden="true">⌄</span></button></h2></div><span class="connection-state" id="embedding-state">未测试</span></div>
-          <div id="embedding-config-content" data-config-content>
+        <details class="config-section" open>
+          <summary class="section-heading config-heading"><div><span class="eyebrow">MODEL SERVICE</span><h2>Embedding</h2></div><span class="config-heading-meta"><span class="connection-state" id="embedding-state">未测试</span><span class="disclosure-icon" aria-hidden="true">⌄</span></span></summary>
+          <div class="config-content">
             <label>Base URL<input id="embedding-base-url" type="url" value="http://localhost:11434/v1"></label>
             <label>API Key<input id="embedding-api-key" type="password" autocomplete="off" value="ollama"></label>
             <label>Model<input id="embedding-model" value="qwen3-embedding:0.6b"></label>
@@ -42,7 +42,7 @@
             <label class="check-row"><input id="embedding-server-key" type="checkbox"> 使用服务端 API Key</label>
             <button class="button secondary full" type="button" data-test-service="embedding">测试 Embedding 连接</button>
           </div>
-        </section>
+        </details>
 
         <section class="config-section inputs-section">
           <span class="eyebrow">INPUT MATERIALS</span><h2>材料</h2>
