@@ -11,16 +11,14 @@ This implementation plan is a planning-only commit. HTML, CSS, JavaScript, and t
 ## Implementation
 
 1. Update the document and visible brand titles.
-2. Preserve each model service as a semantic section with an `h2`; place a native disclosure button inside the heading and keep connection status adjacent.
-3. Wrap each service form body in a controlled panel that can be removed from layout and keyboard navigation with `hidden`.
-4. Add a small dependency-free disclosure module that always initializes both panels expanded and independently synchronizes `hidden` with `aria-expanded` on activation.
-5. Reuse existing tokens for hover, focus, and a short indicator rotation; disable the transition for reduced-motion preferences.
+2. Represent each model service with native `details open` and a full-width `summary` containing its heading, connection status, and disclosure indicator.
+3. Keep each service form body as ordinary details content and remove the custom disclosure JavaScript module and initializer.
+4. Reuse existing tokens for hover, focus, and a short indicator rotation driven by the native `[open]` state; disable the transition for reduced-motion preferences.
 
 ## Verification
 
-1. Use Node's built-in test runner with minimal fake DOM controls to verify fresh initialization, independent toggling, and synchronized accessibility state without adding a frontend dependency.
-2. Invoke that frontend test from pytest so the repository's standard suite exercises the interaction.
-3. Run `uv run pytest` and inspect the rendered page structure at desktop and narrow widths when a browser is available.
+1. Add structural regression coverage for two independent `details open` elements, valid summary headings, and removal of disclosure-specific JavaScript.
+2. Run `uv run pytest` and inspect the rendered page structure at desktop and narrow widths when a browser is available.
 
 ## Scope controls
 
