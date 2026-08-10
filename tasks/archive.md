@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Simplify model configuration disclosure
+- Status: Completed
+- Goal: Replace the non-working custom model configuration controls with simple native expandable sections.
+- Acceptance: LLM and Embedding use independent `details` sections that default open, collapse by clicking the summary row, keep connection status visible, require no custom disclosure JavaScript, and regressions pass.
+
 ## [Completed] Make model configuration collapsible
 - Status: Completed
 - Goal: Rename the Web workbench to CV Agent and let users collapse the LLM and Embedding configuration after setup.
