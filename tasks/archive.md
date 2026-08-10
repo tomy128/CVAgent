@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Make model configuration collapsible
+- Status: Completed
+- Goal: Rename the Web workbench to CV Agent and let users collapse the LLM and Embedding configuration after setup.
+- Acceptance: The visible and browser titles use CV Agent; LLM and Embedding are independently collapsible, default to expanded, retain connection status when collapsed, support keyboard interaction and accessibility state, and regressions pass.
+
 ## [Completed] Improve result usability and resume fidelity
 - Status: Completed
 - Goal: Make review actions discoverable, Graph branches explainable, and generated artifacts preserve the input language and professional resume structure.
