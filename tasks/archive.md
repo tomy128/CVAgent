@@ -1,5 +1,10 @@
 # Archived Tasks
 
+## [Completed] Rewrite README in Chinese
+- Status: Completed
+- Goal: Present CV Agent clearly to Chinese-speaking users and show the current Web workbench screenshot.
+- Acceptance: README is fully rewritten in clear Chinese, covers interview preparation among the core capabilities, embeds `screen-shot.png`, preserves accurate setup, outputs, privacy, architecture, and validation guidance, and unrelated user changes remain untouched.
+
 ## [Completed] Simplify model configuration disclosure
 - Status: Completed
 - Goal: Replace the non-working custom model configuration controls with simple native expandable sections.
